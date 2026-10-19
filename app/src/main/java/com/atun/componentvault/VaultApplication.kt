@@ -12,6 +12,8 @@ import kotlinx.coroutines.launch
 class VaultApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        // 必须最先安装：后面任何一行初始化都可能抛异常
+        CrashGuard.install(this)
         Graph.init(this)
     }
 }

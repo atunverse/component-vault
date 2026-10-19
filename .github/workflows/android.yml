@@ -52,6 +52,11 @@ jobs:
             -keypass componentvault \
             -dname "CN=ComponentVault CI, OU=Dev, O=Atun, L=Shenzhen, ST=Guangdong, C=CN"
 
+      # Manifest 里的类名是纯字符串，AGP 编译期不校验。
+      # 今天就是把 .VaultApplication 写成了 .VaultApp，编译全绿、装机秒退。
+      - name: Check manifest component classes
+        run: python3 tools/check_manifest.py .
+
       - name: Run unit tests
         run: gradle :app:testDebugUnitTest --no-daemon --stacktrace
 
@@ -72,6 +77,28 @@ jobs:
           mkdir -p out
           cp app/build/outputs/apk/debug/*.apk out/ || true
           ls -la out
+
+      # 打包产物级复查：直接读 APK 内的二进制 Manifest 和 dex，
+      # 确认启动类真的存在。前一道检查看源码，这一道看成品，双保险。
+      - name: Verify APK launch config
+        run: |
+          set -e
+          APK=$(ls out/*.apk | head -1)
+          echo "检查 $APK"
+          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | tail -1)
+          "$AAPT" dump xmltree --file AndroidManifest.xml "$APK" > manifest-dump.txt
+          echo "--- application 节点 ---"
+          grep -A6 'E: application' manifest-dump.txt | head -12 || true
+          if ! grep -q 'com\.atun\.componentvault\.VaultApplication' manifest-dump.txt; then
+            echo "::error::APK 内 application 指向的类不是 VaultApplication，装机会闪退"
+            exit 1
+          fi
+          rm -rf apkx && mkdir apkx && unzip -o -q "$APK" 'classes*.dex' -d apkx
+          if ! grep -qa 'Lcom/atun/componentvault/VaultApplication;' apkx/*.dex; then
+            echo "::error::dex 里找不到 VaultApplication 类"
+            exit 1
+          fi
+          echo "OK: Manifest 与 dex 都指向 VaultApplication"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

@@ -3,6 +3,7 @@ package com.atun.componentvault.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,6 +41,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.atun.componentvault.BuildConfig
+import com.atun.componentvault.CrashGuard
 import com.atun.componentvault.Graph
 import com.atun.componentvault.data.Part
 import com.atun.componentvault.net.LanServerService
@@ -381,6 +383,7 @@ fun MeScreen() {
     var testMsg by remember { mutableStateOf<String?>(null) }
     var testOk by remember { mutableStateOf(false) }
     var cacheSize by remember { mutableStateOf(LcscResolver.cacheSize()) }
+    var crashText by remember { mutableStateOf(CrashGuard.readLast(ctx)) }
 
     Column(
         Modifier
@@ -390,6 +393,55 @@ fun MeScreen() {
     ) {
         Text("我的", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(14.dp))
+
+        crashText?.let { crash ->
+            Surface(
+                color = MaterialTheme.colorScheme.errorContainer,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Text(
+                        "上次启动时异常退出",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        crash.lineSequence().filter { it.isNotBlank() }.take(6).joinToString("\n"),
+                        fontSize = 9.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        maxLines = 6,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "文件：" + CrashGuard.fileOf(ctx).absolutePath,
+                        fontSize = 8.5.sp,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Row {
+                        TextButton(onClick = {
+                            val send = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_SUBJECT, "ComponentVault 崩溃日志")
+                                putExtra(Intent.EXTRA_TEXT, crash)
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            runCatching { ctx.startActivity(send) }
+                        }) { Text("发送日志", fontSize = 11.sp) }
+                        TextButton(onClick = {
+                            CrashGuard.clear(ctx)
+                            crashText = null
+                        }) { Text("清除", fontSize = 11.sp) }
+                    }
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+        }
 
         Surface(
             color = MaterialTheme.colorScheme.surface,
