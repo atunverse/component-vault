@@ -148,6 +148,13 @@ class LcscMatcherTest {
         assertFalse(LcscLink.looksLikeSoft404("<title>STM32F103C8T6中文资料-立创商城</title>"))
     }
 
+    @Test
+    fun `正常商品页引用404资源不算软404`() {
+        // 实测踩过的坑：正常页里也引用 404.html，不能靠这个字符串判断
+        val normalPage = "<script>var e='/error/404.html'</script><title>SS34中文资料-立创商城</title>"
+        assertFalse(LcscLink.looksLikeSoft404(normalPage))
+    }
+
     // ---------------------------------------------------------- JSON 解析
 
     @Test
