@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">元器件库</string>
+    <string name="lan_channel_name">局域网服务</string>
+    <string name="lan_channel_desc">在局域网内提供库存数据访问</string>
+</resources>
