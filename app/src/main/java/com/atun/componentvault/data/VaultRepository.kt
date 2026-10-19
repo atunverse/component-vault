@@ -16,7 +16,7 @@ class VaultRepository(private val db: AppDb) {
 
     fun observeParts(): Flow<List<Part>> = partDao.observeAll()
 
-    fun observeTxns(): Flow<List<Txn>> = txnDao.observeRecent()
+    fun observeTxns(): Flow<List<Txn>> = txnDao.observeRecent(200)
 
     suspend fun allParts(): List<Part> = partDao.all()
 
@@ -96,7 +96,7 @@ class VaultRepository(private val db: AppDb) {
         val p = partDao.byId(partId) ?: return StockResult(false, 0, "器件不存在")
         val after = p.qty + delta
         if (after < 0) return StockResult(false, p.qty, "库存不足，当前 ${p.qty}")
-        partDao.setQty(partId, after)
+        partDao.setQty(partId, after, System.currentTimeMillis())
         txnDao.insert(
             Txn(
                 partId = partId,

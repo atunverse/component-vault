@@ -48,7 +48,7 @@ interface PartDao {
     suspend fun delete(part: Part)
 
     @Query("UPDATE part SET qty = :qty, updatedAt = :ts WHERE id = :id")
-    suspend fun setQty(id: Long, qty: Int, ts: Long = System.currentTimeMillis())
+    suspend fun setQty(id: Long, qty: Int, ts: Long)
 
     @Query("SELECT IFNULL(MAX(id), 0) FROM part")
     suspend fun maxId(): Long
@@ -58,7 +58,7 @@ interface PartDao {
 interface TxnDao {
 
     @Query("SELECT * FROM txn ORDER BY createdAt DESC LIMIT :limit")
-    fun observeRecent(limit: Int = 200): Flow<List<Txn>>
+    fun observeRecent(limit: Int): Flow<List<Txn>>
 
     @Query("SELECT * FROM txn WHERE partId = :partId ORDER BY createdAt DESC")
     suspend fun forPart(partId: Long): List<Txn>
