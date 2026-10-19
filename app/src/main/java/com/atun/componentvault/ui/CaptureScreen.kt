@@ -205,7 +205,7 @@ fun CaptureScreen() {
         picked?.let { c ->
             EditForm(
                 candidate = c,
-                defaultMpn = if (c.mpn().isNotBlank()) c.mpn() else input.uppercase(),
+                defaultMpn = c.mpn.ifBlank { input.uppercase() },
                 onSave = { part ->
                     scope.launch {
                         Graph.repo.create(part)
@@ -218,8 +218,6 @@ fun CaptureScreen() {
         }
     }
 }
-
-private fun Enricher.Candidate.mpn(): String = guess.name
 
 @Composable
 private fun CandidateCard(c: Enricher.Candidate, onClick: () -> Unit) {

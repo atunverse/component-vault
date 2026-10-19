@@ -15,6 +15,12 @@ object Enricher {
 
     data class Candidate(
         val guess: RuleParser.Guess,
+        /**
+         * 型号。必须单独放一个字段：
+         * [RuleParser.Guess.name] 在本地规则里是"品类名"（如「贴片电阻」），
+         * 在立创结果里是型号，两者语义不同。拿 name 当型号预填会填出品类名。
+         */
+        val mpn: String = "",
         val lcscCode: String = "",
         val datasheetUrl: String = "",
         val brand: String = "",
@@ -105,6 +111,7 @@ object Enricher {
                 },
                 matchedBy = "立创商城"
             ),
+            mpn = mpn,
             lcscCode = lcscCode,
             datasheetUrl = datasheetUrl.orEmpty(),
             brand = brand,
