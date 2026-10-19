@@ -113,7 +113,29 @@ git tag v0.1.0 && git push origin v0.1.0
 # 输出 app/build/outputs/apk/debug/app-debug.apk
 ```
 
-CI 用 `keytool` 生成临时签名文件 `ci-debug.keystore`，不走正式签名。要正式发布请自备 keystore 并配置 `signingConfigs`。
+### 签名：必须是固定密钥
+
+CI 从仓库 Secret `CI_KEYSTORE_B64` 解码出 `ci-debug.p12` 来签名（PKCS12，别名 `ci`）。
+**不能用每次现生成的密钥** —— AGP 在全新 runner 上会自动新建随机 debug.keystore，
+结果每个发布的 APK 签名都不同，手机上覆盖安装直接报「应用未安装」，
+用户只能卸载重装，库存数据全丢。
+
+证书指纹（CI 里硬校验，不一致直接 fail）：
+
+```
+SHA-256: db2af5769c07e8b728756b54e451f11280f10ea0ca5fca869ac34069f1e6027f
+```
+
+密钥不入库（`.gitignore` 排除 `*.p12` / `*.keystore`）。换机器或换账号时，
+需要重新生成密钥并更新 Secret **和** workflow 里的指纹常量，否则老用户无法升级。
+
+### 三道构建期校验
+
+| 步骤 | 拦什么 |
+|---|---|
+| `tools/check_manifest.py` | Manifest 里声明的组件类在源码里不存在（编译期不报的坑） |
+| `Verify APK launch config` | 成品 APK 的二进制 Manifest 指向的类、dex 里是否真有 |
+| `Verify APK signature` | 签名指纹漂移，防止下次更新覆盖安装失败 |
 
 ## 技术栈
 
@@ -130,6 +152,10 @@ CI 用 `keytool` 生成临时签名文件 `ci-debug.keystore`，不走正式签�
 3. 安装后首次启动会灌入 8 条示例数据
 
 局域网功能需要手机和电脑在同一网段；连不上优先查路由器的 **AP 隔离**。
+
+> **从 v0.2.0 升到 v0.2.1 必须先卸载旧版。** v0.2.0 及以前的包是每次临时密钥签的，
+> 与本版签名不同，直接覆盖会报「应用未安装」。卸载会清空本地库存（v0.2.0 一启动就闪退，
+> 本来也没有数据）。**从 v0.2.1 起签名固定，以后可以正常覆盖升级，数据不丢。**
 
 ## 数据说明
 
