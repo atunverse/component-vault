@@ -46,6 +46,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.atun.componentvault.Graph
 import com.atun.componentvault.data.Part
+import com.atun.componentvault.enrich.Enricher
+import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
 
 @Composable
@@ -225,7 +227,9 @@ private fun PartRow(p: Part, onClick: () -> Unit) {
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = listOf(p.name, p.packageName).filter { it.isNotBlank() }.joinToString(" · "),
+                    text = listOf(p.name, p.packageName, p.lcscCode)
+                        .filter { it.isNotBlank() }
+                        .joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -287,12 +291,46 @@ private fun StockAdjustDialog(part: Part, onDismiss: () -> Unit) {
     var inbound by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("调整库存 · ${part.mpn.ifBlank { part.internalCode }}") },
         text = {
             Column {
+                if (part.lcscCode.isNotBlank()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "立创 ${part.lcscCode}",
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            "商品页 ↗",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clickable {
+                                    openUrl(ctx, Enricher.knownUrl(part.lcscProductId, part.lcscCode))
+                                }
+                                .padding(vertical = 2.dp)
+                        )
+                        if (part.datasheetUrl.isNotBlank()) {
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                "手册 ↗",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .clickable { openUrl(ctx, part.datasheetUrl) }
+                                    .padding(vertical = 2.dp)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
                 Text(
                     "当前 ${part.qty} 件，仓位 ${part.location.ifBlank { "未标" }}",
                     style = MaterialTheme.typography.bodySmall,

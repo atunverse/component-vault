@@ -31,8 +31,14 @@ data class Part(
     val packageName: String = "",
     /** 品牌 */
     val brand: String = "",
-    /** 立创商城元件编号，如 C14663，用于查数据手册 */
+    /** 立创商城元件编号，如 C8734。业务标识，人读用 */
     val lcscCode: String = "",
+    /**
+     * 立创商城商品页数字 ID（搜索接口的 id 字段）。
+     * 商品页链接唯一正确格式是 https://item.szlcsc.com/{id}.html ，
+     * 用立创号拼会落到软 404（HTTP 200 但页面是"没有找到"），所以必须单独存。
+     */
+    val lcscProductId: Long = 0,
     /** 数据手册地址 */
     val datasheetUrl: String = "",
     /** 动态参数，JSON 对象字符串，key 由分类的 ParamDef 决定 */

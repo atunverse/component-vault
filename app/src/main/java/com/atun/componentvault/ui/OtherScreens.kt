@@ -43,7 +43,10 @@ import com.atun.componentvault.BuildConfig
 import com.atun.componentvault.Graph
 import com.atun.componentvault.data.Part
 import com.atun.componentvault.net.LanServerService
+import com.atun.componentvault.enrich.LcscResolver
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 
 // ---------------------------------------------------------------- BOM 分析
 
@@ -373,16 +376,11 @@ private fun Tips(kind: Int) {
 @Composable
 fun MeScreen() {
     val ctx = LocalContext.current
-    val prefs = remember { ctx.getSharedPreferences("vault", Context.MODE_PRIVATE) }
-    var apiKey by remember { mutableStateOf(prefs.getString("lcsc_key", "") ?: "") }
-    var saved by remember { mutableStateOf(false) }
-
-    LaunchedEffect(saved) {
-        if (saved) {
-            delay(1600)
-            saved = false
-        }
-    }
+    val scope = rememberCoroutineScope()
+    var testing by remember { mutableStateOf(false) }
+    var testMsg by remember { mutableStateOf<String?>(null) }
+    var testOk by remember { mutableStateOf(false) }
+    var cacheSize by remember { mutableStateOf(LcscResolver.cacheSize()) }
 
     Column(
         Modifier
@@ -399,31 +397,69 @@ fun MeScreen() {
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(Modifier.padding(16.dp)) {
-                Text("立创商城开放平台", style = MaterialTheme.typography.titleMedium)
+                Text("立创元件库", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "填入 Key 后可联网补全参数与数据手册；留空则只用本地规则解析。额度 1000 次/日、200 次/分。",
+                    "无需 API Key。输入型号、关键词或立创号即检索，返回规格参数、封装、立创号，并生成可直达商品页的链接。",
                     fontSize = 10.5.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = apiKey,
-                    onValueChange = { apiKey = it.trim() },
-                    label = { Text("API Key") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = {
-                        prefs.edit().putString("lcsc_key", apiKey).apply()
-                        saved = true
-                    }) { Text(if (saved) "已保存" else "保存") }
-                    OutlinedButton(onClick = {
-                        apiKey = ""
-                        prefs.edit().remove("lcsc_key").apply()
-                    }) { Text("清除") }
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Button(
+                        onClick = {
+                            testing = true
+                            testMsg = null
+                            scope.launch {
+                                when (val r = LcscResolver.resolve("STM32F103C8T6", forceRefresh = true)) {
+                                    is LcscResolver.Result.Hits -> {
+                                        testOk = true
+                                        val h = r.hits.firstOrNull()
+                                        testMsg = "正常 · 命中 ${r.hits.size} 条 · 示例 ${h?.lcscCode ?: "-"}"
+                                    }
+                                    is LcscResolver.Result.Empty -> {
+                                        testOk = false
+                                        testMsg = "接口可达，但无结果"
+                                    }
+                                    is LcscResolver.Result.Failed -> {
+                                        testOk = false
+                                        testMsg = "失败：${r.reason}"
+                                    }
+                                }
+                                cacheSize = LcscResolver.cacheSize()
+                                testing = false
+                            }
+                        },
+                        enabled = !testing
+                    ) { Text(if (testing) "测试中…" else "测试连接") }
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        testMsg ?: "未测试",
+                        fontSize = 10.5.sp,
+                        color = when {
+                            testMsg == null -> MaterialTheme.colorScheme.onSurfaceVariant
+                            testOk -> Color(0xFF059669)
+                            else -> Color(0xFFB45309)
+                        },
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "缓存 $cacheSize 组关键词",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = {
+                        LcscResolver.clearCache()
+                        cacheSize = 0
+                        testMsg = "缓存已清空"
+                        testOk = true
+                    }) { Text("清除缓存", fontSize = 11.sp) }
                 }
             }
         }
@@ -438,7 +474,8 @@ fun MeScreen() {
             Column(Modifier.padding(16.dp)) {
                 InfoRow("应用版本", BuildConfig.VERSION_NAME)
                 InfoRow("数据存储", "本机 Room 数据库，不上传")
-                InfoRow("补全数据源", "内置型号库 + 规则解析" + if (apiKey.isNotBlank()) " + 立创 API" else "")
+                InfoRow("补全数据源", "立创元件库 + 内置型号库 + 规则解析")
+                InfoRow("商品页链接", "item.szlcsc.com/{商品ID}.html")
                 InfoRow("局域网端口", LanServerService.DEFAULT_PORT.toString())
             }
         }

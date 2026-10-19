@@ -113,4 +113,7 @@ dependencies {
     implementation("io.ktor:ktor-server-status-pages:2.3.12")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // 纯 JVM 单测：覆盖型号匹配排序与立创链接构造，不需要模拟器
+    testImplementation("junit:junit:4.13.2")
 }
