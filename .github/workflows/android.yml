@@ -122,7 +122,7 @@ jobs:
           DIGEST=$("$APKSIGNER" verify --print-certs out/*.apk \
             | grep 'certificate SHA-256 digest' | head -1 | awk '{print $NF}' \
             | tr -d ':' | tr 'A-Z' 'a-z')
-          EXPECT="db2af5769c07e8b728756b54e451f11280f1b0e0ca5c5fca869ac34069f1e6027f"
+          EXPECT="db2af5769c07e8b728756b54e451f11280f10ea0ca5fca869ac34069f1e6027f"
           if [ "$DIGEST" != "$EXPECT" ]; then
             echo "::error::签名指纹不符：实际 $DIGEST，期望 $EXPECT。换了密钥会导致老用户无法覆盖安装"
             exit 1
