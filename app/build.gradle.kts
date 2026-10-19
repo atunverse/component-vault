@@ -19,12 +19,14 @@ android {
         vectorDrawables { useSupportLibrary = true }
     }
 
-    // CI 会用 keytool 生成 ci-debug.keystore；本地没有该文件时回退到 debug 签名
-    val ciKeystore = file("${rootDir}/ci-debug.keystore")
+    // 固定签名的 PKCS12 密钥，由 CI 从仓库 Secret CI_KEYSTORE_B64 解码得到。
+    // 本地没有该文件时回退到 AGP 的 debug 签名，仅影响本地调试。
+    val ciKeystore = file("${rootDir}/ci-debug.p12")
     signingConfigs {
         create("ci") {
             if (ciKeystore.exists()) {
                 storeFile = ciKeystore
+                storeType = "PKCS12"
                 storePassword = "componentvault"
                 keyAlias = "ci"
                 keyPassword = "componentvault"
@@ -36,6 +38,12 @@ android {
         debug {
             isMinifyEnabled = false
             applicationIdSuffix = ""
+            // 必须也用固定密钥：AGP 每次在全新 runner 上自动生成的 debug.keystore
+            // 都是随机密钥，导致每次发布的新包签名都不同，
+            // 手机上覆盖安装会报「应用未安装」，只能卸载重装 —— 库存数据就没了。
+            if (ciKeystore.exists()) {
+                signingConfig = signingConfigs.getByName("ci")
+            }
         }
         release {
             isMinifyEnabled = false

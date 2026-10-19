@@ -12,3 +12,8 @@ app/build
 *.apk
 *.keystore
 !debug.keystore
+
+# 固定签名密钥由 CI 从仓库 Secret 解码，绝不入库
+ci-debug.p12
+*.p12
+*.keystore

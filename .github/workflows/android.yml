@@ -41,16 +41,28 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
-      - name: Generate CI signing key
+      # 固定签名密钥。每次重建密钥会导致新包无法覆盖安装旧包（报「应用未安装」），
+      # 用户只能卸载重装，库存数据全丢。所以密钥必须持久化，放在仓库 Secret 里。
+      - name: Prepare signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.CI_KEYSTORE_B64 }}
         run: |
-          keytool -genkeypair -v \
-            -keystore ci-debug.keystore \
-            -storetype JKS \
-            -alias ci \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass componentvault \
-            -keypass componentvault \
-            -dname "CN=ComponentVault CI, OU=Dev, O=Atun, L=Shenzhen, ST=Guangdong, C=CN"
+          set -e
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > ci-debug.p12
+            echo "已从 Secret 解码固定签名密钥"
+          else
+            echo "::warning::未配置 CI_KEYSTORE_B64，本次使用临时密钥，产物无法覆盖安装旧版本"
+            openssl req -x509 -newkey rsa:2048 -days 10950 -nodes \
+              -keyout /tmp/k.pem -out /tmp/c.pem \
+              -subj "/CN=ComponentVault Temp, O=Atun, C=CN" 2>/dev/null
+            openssl pkcs12 -export -in /tmp/c.pem -inkey /tmp/k.pem \
+              -name ci -out ci-debug.p12 -passout pass:componentvault
+          fi
+          keytool -list -keystore ci-debug.p12 -storetype PKCS12 \
+            -storepass componentvault | sed -n '1,6p'
+          openssl pkcs12 -in ci-debug.p12 -nokeys -passin pass:componentvault 2>/dev/null \
+            | openssl x509 -noout -fingerprint -sha256
 
       # Manifest 里的类名是纯字符串，AGP 编译期不校验。
       # 今天就是把 .VaultApplication 写成了 .VaultApp，编译全绿、装机秒退。
@@ -99,6 +111,23 @@ jobs:
             exit 1
           fi
           echo "OK: Manifest 与 dex 都指向 VaultApplication"
+
+      # 签名指纹固定校验：密钥一旦变了，用户下次更新就会覆盖安装失败、数据丢失。
+      # 与其等手机上撞见「应用未安装」，不如在构建时就拦住。
+      - name: Verify APK signature
+        run: |
+          set -e
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | tail -1)
+          "$APKSIGNER" verify --print-certs out/*.apk | grep -i 'SHA-256' | head -3 || true
+          DIGEST=$("$APKSIGNER" verify --print-certs out/*.apk \
+            | grep 'certificate SHA-256 digest' | head -1 | awk '{print $NF}' \
+            | tr -d ':' | tr 'A-Z' 'a-z')
+          EXPECT="db2af5769c07e8b728756b54e451f11280f1b0e0ca5c5fca869ac34069f1e6027f"
+          if [ "$DIGEST" != "$EXPECT" ]; then
+            echo "::error::签名指纹不符：实际 $DIGEST，期望 $EXPECT。换了密钥会导致老用户无法覆盖安装"
+            exit 1
+          fi
+          echo "OK: 签名指纹与固定密钥一致"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
