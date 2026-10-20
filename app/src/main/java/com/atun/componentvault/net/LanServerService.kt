@@ -278,7 +278,9 @@ class LanServerService : Service() {
         if (p.domain == com.atun.componentvault.data.Domains.FILAMENT) {
             put("material", com.atun.componentvault.data.FilamentInfo.material(p))
             put("colorName", com.atun.componentvault.data.FilamentInfo.colorName(p))
-            put("colorHex", com.atun.componentvault.data.FilamentInfo.colorHex(p))
+            // 只吐首色：这个字段是给电脑端直接当 CSS 色值用的，
+            // 渐变串（#A,#B）塞进去会失效（多色在网页端收益也不大）
+            put("colorHex", com.atun.componentvault.data.FilamentInfo.colorHexes(p).firstOrNull() ?: "")
             put("diameter", com.atun.componentvault.data.FilamentInfo.diameterMm(p) ?: 1.75)
             put("netWeight", com.atun.componentvault.data.FilamentInfo.netWeight(p) ?: 0.0)
             put("remainingMeters", com.atun.componentvault.data.FilamentInfo.remainingMeters(p) ?: 0.0)

@@ -42,11 +42,14 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.atun.componentvault.Graph
+import com.atun.componentvault.data.Domains
+import com.atun.componentvault.data.FilamentInfo
 import com.atun.componentvault.data.IconStore
 import com.atun.componentvault.data.Part
 import kotlinx.coroutines.Dispatchers
@@ -90,8 +93,11 @@ object IconCache {
 }
 
 /**
- * 统一图标渲染。没有图时退回「封装文字占位」，
- * 保持与 v0.2.1 一致的视觉，列表不会出现大片空白。
+ * 统一图标渲染。
+ *
+ * - 电子/五金/工具：有图显示图，没图退回「封装文字占位」，与 v0.2.1 一致。
+ * - 3D 耗材：**颜色就是主视觉**。没拍照片时整块铺耗材色（多色即渐变），中间压材料短名；
+ *   有照片时也留一圈耗材色做外框 —— 一排耗材在列表里靠颜色区分，比靠名字快得多。
  */
 @Composable
 fun PartIcon(
@@ -111,24 +117,58 @@ fun PartIcon(
         else withContext(Dispatchers.IO) { IconCache.load(ctx, part.iconPath) }
     }
 
+    val isFilament = part.domain == Domains.FILAMENT
+    val hex = if (isFilament) FilamentInfo.colorHexes(part).joinToString(",") else ""
+    val palette = if (isFilament) parseHexColors(hex) else emptyList()
+    // 耗材颜色要跟着参数变，而 produceState 的 key 只看图标文件；这里直接读 part，
+    // 改颜色后整棵重组即可生效（颜色不落盘，不需要缓存）
+    val hasColor = palette.isNotEmpty()
+    val shape = RoundedCornerShape(corner)
+
     val base = modifier
         .size(size)
-        .clip(RoundedCornerShape(corner))
-        .background(if (img != null) Color.White else MaterialTheme.colorScheme.surfaceVariant)
+        .clip(shape)
+        .then(
+            when {
+                hasColor -> Modifier.background(colorBrush(hex, MaterialTheme.colorScheme.surfaceVariant))
+                img != null -> Modifier.background(Color.White)
+                else -> Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
+            }
+        )
 
     Box(
         modifier = if (onClick != null) base.clickable { onClick() } else base,
         contentAlignment = Alignment.Center
     ) {
-        if (img != null) {
-            Image(
+        when {
+            // 耗材 + 照片：色框留给颜色，照片放在白底内衬上，白底方图不会糊在彩色里
+            img != null && hasColor -> Box(
+                Modifier
+                    .fillMaxSize()
+                    .padding(size * 0.075f)
+                    .clip(RoundedCornerShape(corner * 0.55f))
+                    .background(Color.White),
+                contentAlignment = Alignment.Center
+            ) {
+                Image(
+                    bitmap = img!!,
+                    contentDescription = part.displayTitle,
+                    modifier = Modifier.fillMaxSize().padding(1.dp),
+                    contentScale = ContentScale.Fit
+                )
+            }
+            img != null -> Image(
                 bitmap = img!!,
                 contentDescription = part.displayTitle,
                 modifier = Modifier.fillMaxSize().padding(2.dp),
                 contentScale = ContentScale.Fit
             )
-        } else {
-            Text(
+            isFilament -> FilamentGlyph(
+                text = FilamentInfo.shortMaterial(part),
+                hex = hex,
+                sizeDp = size.value
+            )
+            else -> Text(
                 text = part.packageName.substringBefore(' ').take(6).ifBlank { "—" },
                 fontSize = if (part.packageName.length > 6) 9.sp else 10.sp,
                 fontFamily = FontFamily.Monospace,
@@ -136,6 +176,31 @@ fun PartIcon(
             )
         }
     }
+}
+
+/**
+ * 纯色块上的材料名。
+ *
+ * 字色按色块平均亮度取反色（见 [onColorText]），底衬再取字色的反色做半透明胶囊 ——
+ * 这样黑料白字、白料黑字、彩虹渐变也都读得清，不需要给每种颜色单独配色。
+ */
+@Composable
+private fun FilamentGlyph(text: String, hex: String, sizeDp: Float) {
+    val fg = onColorText(hex)
+    val plate = if (fg == Color.White) Color.Black.copy(alpha = 0.24f)
+    else Color.White.copy(alpha = 0.6f)
+    Text(
+        text = text,
+        fontSize = (sizeDp * 0.17f).coerceIn(9f, 18f).sp,
+        fontFamily = FontFamily.Monospace,
+        fontWeight = FontWeight.SemiBold,
+        color = fg,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(plate)
+            .padding(horizontal = 4.dp, vertical = 1.dp)
+    )
 }
 
 /**

@@ -34,7 +34,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -178,6 +180,16 @@ fun FilamentEditor(
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurface
                 )
+                val hexes = FilamentInfo.splitHexes(draft.colorHex)
+                if (hexes.isNotEmpty()) {
+                    Text(
+                        if (hexes.size > 1) "渐变 · ${hexes.size} 色" else hexes[0],
+                        fontSize = 9.5.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
             Text(
                 "选择",
@@ -319,7 +331,23 @@ fun FilamentEditor(
 
     if (showColors) {
         OptionSheet(title = "选择颜色", onDismiss = { showColors = false }) {
-            items(FilamentPresets.COLORS) { c ->
+            // 自定义色值：手里有色号（或多种颜色的丝材）直接粘进来，比在预设里碰运气准
+            item {
+                OutlinedTextField(
+                    value = draft.colorHex,
+                    onValueChange = { raw ->
+                        val matched = matchColorName(raw)
+                        onChange(draft.copy(colorHex = raw, colorName = matched ?: draft.colorName))
+                    },
+                    label = { Text("颜色值（单色或逗号分隔的渐变）", fontSize = 9.5.sp) },
+                    placeholder = { Text("#1A1A1A 或 #E53935,#FB8C00", fontSize = 10.sp) },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)
+                )
+            }
+            item { ColorGroupTitle("单色") }
+            items(FilamentPresets.SOLID_COLORS) { c ->
                 OptionRow(
                     title = c.name,
                     subtitle = c.hex,
@@ -331,8 +359,41 @@ fun FilamentEditor(
                     showColors = false
                 }
             }
+            item { ColorGroupTitle("渐变（多色线材）") }
+            items(FilamentPresets.GRADIENT_COLORS) { c ->
+                OptionRow(
+                    title = c.name,
+                    subtitle = "渐变 · ${FilamentInfo.splitHexes(c.hex).size} 色",
+                    trailing = "",
+                    selected = draft.colorName == c.name,
+                    leading = { ColorDot(c.hex, 18.dp) }
+                ) {
+                    onChange(draft.copy(colorName = c.name, colorHex = c.hex))
+                    showColors = false
+                }
+            }
         }
     }
+}
+
+/** 自定义色值如果正好等于某个预设，就把颜色名一起同步，避免「名字=黑、色值=红」 */
+private fun matchColorName(raw: String): String? {
+    val norm = FilamentInfo.splitHexes(raw).joinToString(",")
+    if (norm.isBlank()) return null
+    return FilamentPresets.COLORS
+        .firstOrNull { FilamentInfo.splitHexes(it.hex).joinToString(",") == norm }
+        ?.name
+}
+
+@Composable
+private fun ColorGroupTitle(text: String) {
+    Text(
+        text,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp)
+    )
 }
 
 /**
@@ -386,6 +447,14 @@ fun FilamentCard(p: Part) {
 
             Spacer(Modifier.height(10.dp))
             FilamentRow("线径", FilamentInfo.diameterMm(p)?.let { "${fmtQty(it)} mm" } ?: "—")
+            val colorHexes = FilamentInfo.colorHexes(p)
+            if (FilamentInfo.colorName(p).isNotBlank() || colorHexes.isNotEmpty()) {
+                FilamentRow(
+                    "颜色",
+                    FilamentInfo.colorName(p).ifBlank { "—" } +
+                        if (colorHexes.size > 1) "（渐变 ${colorHexes.size} 色）" else ""
+                )
+            }
             meters?.let { FilamentRow("剩余长度", "约 ${fmtQty(Math.round(it * 10) / 10.0)} 米") }
             FilamentRow("喷嘴 / 热床", "${FilamentInfo.nozzle(p).ifBlank { "—" }}℃ / ${FilamentInfo.bed(p).ifBlank { "—" }}℃")
             FilamentRow("密度", FilamentInfo.density(p)?.let { "$it g/cm³" } ?: "—")
@@ -468,20 +537,44 @@ fun FilamentSummary(parts: List<Part>) {
 
 @Composable
 fun ColorDot(hex: String, size: androidx.compose.ui.unit.Dp) {
-    val c = parseHexColor(hex) ?: MaterialTheme.colorScheme.surfaceVariant
+    val fallback = MaterialTheme.colorScheme.surfaceVariant
     Box(
         Modifier
             .size(size)
             .clip(CircleShape)
-            .background(c)
+            .background(colorBrush(hex, fallback))
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
     )
 }
 
-fun parseHexColor(hex: String): Color? {
-    if (!hex.startsWith("#") || hex.length < 7) return null
-    return runCatching { Color(android.graphics.Color.parseColor(hex)) }.getOrNull()
+/** 颜色刷子：单色 → 纯色；多色 → 斜向渐变。图标与色点共用，保证两处观感一致 */
+fun colorBrush(hex: String?, fallback: Color): Brush {
+    val cs = parseHexColors(hex)
+    return when (cs.size) {
+        0 -> SolidColor(fallback)
+        1 -> SolidColor(cs[0])
+        else -> Brush.linearGradient(cs)
+    }
 }
+
+/** 解析多色串里的全部合法色值；非法片段丢弃 */
+fun parseHexColors(hex: String?): List<Color> =
+    FilamentInfo.splitHexes(hex).mapNotNull { parseHexColor(it) }
+
+fun parseHexColor(hex: String?): Color? {
+    val first = FilamentInfo.splitHexes(hex).firstOrNull() ?: return null
+    return runCatching { Color(android.graphics.Color.parseColor(first)) }.getOrNull()
+}
+
+/**
+ * 颜色块上的文字色。
+ *
+ * 渐变耗材必须按整段色的平均亮度取反色：只看某一个色，会在另一段上糊成一片。
+ * 白字配深色块、深字配浅色块，浅色耗材（白 / 米白）上就不会出现白字白底。
+ */
+fun onColorText(hex: String?): Color =
+    if (FilamentInfo.preferLightText(FilamentInfo.splitHexes(hex))) Color.White
+    else Color(0xFF1A1A1A)
 
 @Composable
 private fun PickerRow(label: String, value: String, hint: String, onClick: () -> Unit) {

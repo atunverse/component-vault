@@ -117,4 +117,59 @@ class FilamentInfoTest {
         assertEquals(200.0, FilamentInfo.firstNumber("200-220")!!, 0.001)
         assertNull(FilamentInfo.firstNumber(""))
     }
+
+    @Test
+    fun `颜色值支持多色渐变`() {
+        val p = spool(params = """{"颜色":"彩虹","颜色值":"#E53935,#FB8C00,#FDD835,#43A047"}""")
+        val hexes = FilamentInfo.colorHexes(p)
+        assertEquals(4, hexes.size)
+        assertEquals("#E53935", hexes[0])
+        assertTrue(FilamentInfo.gradient(p))
+        assertEquals("#E53935,#FB8C00,#FDD835,#43A047", FilamentInfo.colorHex(p))
+
+        // 单色不能误判成渐变
+        assertTrue(!FilamentInfo.gradient(spool(params = """{"颜色值":"#1A1A1A"}""")))
+    }
+
+    @Test
+    fun `颜色值解析容错`() {
+        // 不带 # / 大小写 / 中文逗号 / 空格分隔都能吃
+        assertEquals(listOf("#1A1A1A", "#F2F2F2"), FilamentInfo.splitHexes("1a1a1a，#f2f2f2"))
+        assertEquals(listOf("#1A1A1A", "#F2F2F2"), FilamentInfo.splitHexes("#1A1A1A #F2F2F2"))
+        // 非法片段只丢自己，不要把整串判死
+        assertEquals(listOf("#1A1A1A"), FilamentInfo.splitHexes("#1A1A1A,红色"))
+        assertTrue(FilamentInfo.splitHexes("").isEmpty())
+        assertTrue(FilamentInfo.splitHexes(null).isEmpty())
+    }
+
+    @Test
+    fun `没填颜色值也能按颜色名推出预设色`() {
+        assertEquals("#1A1A1A", FilamentInfo.colorHex(spool(params = """{"颜色":"黑"}""")))
+        // 渐变预设同样能靠名字推出来
+        assertEquals(6, FilamentInfo.colorHexes(spool(params = """{"颜色":"彩虹"}""")).size)
+    }
+
+    @Test
+    fun `图标上的材料缩写去掉修饰词与括注`() {
+        assertEquals("PLA", FilamentInfo.shortMaterial(spool(category = "PLA", params = """{"材质":"哑光 PLA"}""")))
+        assertEquals("PA", FilamentInfo.shortMaterial(spool(category = "PA", params = """{"材质":"PA（尼龙）"}""")))
+        assertEquals("PLA-CF", FilamentInfo.shortMaterial(spool(category = "PLA-CF", params = """{"材质":"PLA-CF"}""")))
+        assertEquals("未知", FilamentInfo.shortMaterial(spool(category = "", params = "{}")))
+    }
+
+    @Test
+    fun `深色料配白字浅色料配深字`() {
+        // 黑料平均亮度接近 0 → 白字
+        assertTrue(FilamentInfo.preferLightText(FilamentInfo.splitHexes("#1A1A1A")))
+        // 白料 → 深字
+        assertTrue(!FilamentInfo.preferLightText(FilamentInfo.splitHexes("#F2F2F2")))
+        // 彩虹里深色段居多，平均下来仍要白字
+        assertTrue(
+            FilamentInfo.preferLightText(
+                FilamentInfo.splitHexes("#E53935,#FB8C00,#FDD835,#43A047,#1E88E5,#8E24AA")
+            )
+        )
+        // 没有颜色时默认深字（配浅灰占位底）
+        assertTrue(!FilamentInfo.preferLightText(emptyList()))
+    }
 }

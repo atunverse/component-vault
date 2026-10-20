@@ -29,10 +29,32 @@ class FilamentPresetsTest {
     @Test
     fun `品牌与颜色预设都非空且色值合法`() {
         assertTrue(FilamentPresets.BRANDS.size >= 10)
-        assertTrue(FilamentPresets.COLORS.size >= 12)
+        assertTrue(FilamentPresets.SOLID_COLORS.size >= 12)
+        assertTrue("渐变预设至少 4 组", FilamentPresets.GRADIENT_COLORS.size >= 4)
+        // 单色一个色值、渐变逗号串联多段，逐段校验
         FilamentPresets.COLORS.forEach { c ->
-            assertTrue("${c.name} 色值格式不对：${c.hex}", Regex("^#[0-9A-Fa-f]{6}$").matches(c.hex))
+            assertTrue(
+                "${c.name} 色值格式不对：${c.hex}",
+                Regex("^#[0-9A-Fa-f]{6}(,#[0-9A-Fa-f]{6})*$").matches(c.hex)
+            )
         }
+        FilamentPresets.GRADIENT_COLORS.forEach {
+            assertTrue("${it.name} 应该有多段色值", it.gradient)
+        }
+        FilamentPresets.SOLID_COLORS.forEach {
+            assertTrue("${it.name} 不该是渐变", !it.gradient)
+        }
+    }
+
+    @Test
+    fun `渐变颜色的名字要压过内部的单色词`() {
+        // 「黑金」含「黑」、「银灰」含「银」「灰」：长度优先才不会被拆成单色
+        assertEquals("黑金", FilamentPresets.guessColor("PLA 黑金 1.75")?.name)
+        assertEquals("银灰", FilamentPresets.guessColor("PETG 银灰")?.name)
+        assertEquals("彩虹", FilamentPresets.guessColor("丝绸 彩虹")?.name)
+        // 没有渐变词时仍按单色走
+        assertEquals("黑", FilamentPresets.guessColor("PLA 黑")?.name)
+        assertEquals("银", FilamentPresets.guessColor("ABS 银")?.name)
     }
 
     @Test

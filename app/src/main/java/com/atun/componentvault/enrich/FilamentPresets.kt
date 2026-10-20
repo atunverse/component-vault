@@ -33,7 +33,15 @@ object FilamentPresets {
         val enclosure: Boolean = false
     )
 
-    data class Color(val name: String, val hex: String)
+    /**
+     * 颜色预设。`hex` 允许是**单色**（`#1A1A1A`）或**多色渐变**（`#E53935,#FB8C00,…`）：
+     * 渐变耗材（彩虹、双色、渐变丝绸）用逗号串联多个色值，图标与色点按顺序铺成渐变。
+     * 这样「渐变色」不需要新增一套字段，Spoolman 的 `multi_color_hexes` 也是逗号分隔的多值。
+     */
+    data class Color(val name: String, val hex: String) {
+        /** 多色即为渐变 */
+        val gradient: Boolean get() = hex.contains(',')
+    }
 
     // ------------------------------------------------------------ 材料类型
 
@@ -84,7 +92,8 @@ object FilamentPresets {
 
     // ------------------------------------------------------------ 颜色
 
-    val COLORS: List<Color> = listOf(
+    /** 单色预设 */
+    val SOLID_COLORS: List<Color> = listOf(
         Color("黑", "#1A1A1A"),
         Color("白", "#F2F2F2"),
         Color("灰", "#9E9E9E"),
@@ -103,6 +112,25 @@ object FilamentPresets {
         Color("米白", "#EFE6D8"),
         Color("透明", "#E3F2FD")
     )
+
+    /**
+     * 渐变预设：多色串联，界面按横向渐变铺色。
+     * 名字都取 2 个字，`guessColor` 的长名优先规则才能压住内部的单色词
+     * （「黑金」要胜过「黑」，「银灰」要胜过「银」）。
+     */
+    val GRADIENT_COLORS: List<Color> = listOf(
+        Color("彩虹", "#E53935,#FB8C00,#FDD835,#43A047,#1E88E5,#8E24AA"),
+        Color("日落", "#D32F2F,#FF9800,#FDD835"),
+        Color("冰川", "#0D47A1,#26C6DA,#69F0AE"),
+        Color("晚霞", "#7B1FA2,#EC407A,#FFB74D"),
+        Color("黑金", "#1A1A1A,#8D6E63,#C9A227"),
+        Color("银灰", "#F2F2F2,#9E9E9E,#E0E0E0"),
+        Color("红蓝", "#D32F2F,#1565C0"),
+        Color("木纹", "#6D4C41,#C9A227,#EFE6D8")
+    )
+
+    /** 全部颜色（单色在前、渐变在后） */
+    val COLORS: List<Color> = SOLID_COLORS + GRADIENT_COLORS
 
     // ------------------------------------------------------------ 规格选项
 

@@ -78,11 +78,80 @@ object FilamentInfo {
 
     fun colorName(p: Part): String = get(p, FilamentKeys.COLOR)
 
-    /** 颜色色值。没填时按颜色名去预设里查，保证列表上的圆点一定有色 */
-    fun colorHex(p: Part): String {
-        val explicit = get(p, FilamentKeys.COLOR_HEX)
-        if (explicit.startsWith("#") && explicit.length >= 7) return explicit
-        return FilamentPresets.color(colorName(p))?.hex.orEmpty()
+    /**
+     * 颜色色值列表。单色返回 1 项，渐变耗材返回 2 项以上。
+     *
+     * 渐变不新增字段：「颜色值」里用逗号串联多个色值即可（`#E53935,#FB8C00,#FDD835`），
+     * 这与 Spoolman 的 `multi_color_hexes` 存法一致；单色数据完全兼容。
+     */
+    fun colorHexes(p: Part): List<String> {
+        val explicit = splitHexes(get(p, FilamentKeys.COLOR_HEX))
+        if (explicit.isNotEmpty()) return explicit
+        return splitHexes(FilamentPresets.color(colorName(p))?.hex)
+    }
+
+    /** 颜色色值（完整串，渐变时为逗号分隔的多值）。没填时按颜色名去预设里查 */
+    fun colorHex(p: Part): String = colorHexes(p).joinToString(",")
+
+    /** 是否渐变色 */
+    fun gradient(p: Part): Boolean = colorHexes(p).size > 1
+
+    /**
+     * 图标上显示的短材料名。图标只有 46dp，放不下「哑光 PLA」「PA（尼龙）」这种全称，
+     * 去掉括注与修饰前缀，只留真正区分的那一段。
+     */
+    fun shortMaterial(p: Part): String {
+        val compact = material(p)
+            .replace(Regex("（[^）]*）|\\([^)]*\\)"), "")
+            .trim()
+            .substringAfterLast(' ')
+            .trim()
+        return compact.ifBlank { "耗材" }.take(6)
+    }
+
+    private val HEX_PART = Regex("""^#?([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$""")
+
+    /**
+     * sRGB 相对亮度（0 = 黑，1 = 白）。公式与 Compose 的 `Color.luminance()` 一致，
+     * 但这里是纯 Kotlin —— 图标要在 JVM 单测里也能验证「深色料配白字」这件事。
+     */
+    fun hexLuminance(hex: String): Float? {
+        val body = splitHexes(hex).firstOrNull()?.removePrefix("#") ?: return null
+        val rgb = if (body.length == 8) body.substring(2) else body
+        if (rgb.length != 6) return null
+        fun channel(i: Int): Double {
+            val v = (rgb.substring(i, i + 2).toIntOrNull(16) ?: return 0.0) / 255.0
+            return if (v <= 0.04045) v / 12.92 else Math.pow((v + 0.055) / 1.055, 2.4)
+        }
+        return (0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4)).toFloat()
+    }
+
+    /**
+     * 色块上该用白字还是深字。
+     *
+     * 取整段渐变的**平均**亮度：只看一端会在另一端糊掉。
+     * 阈值 0.45 是偏保守的取法 —— 宁可早一点换白字，也别在中间灰上黑白都不清。
+     */
+    fun preferLightText(hexes: List<String>): Boolean {
+        val ls = hexes.mapNotNull { hexLuminance(it) }
+        if (ls.isEmpty()) return false
+        return ls.average() < 0.45
+    }
+
+    /**
+     * 解析颜色值文本。支持 `#1A1A1A`、`1a1a1a`、`#1A1A1A,#F2F2F2`、`#1A1A1A #F2F2F2`
+     * 等写法（中文逗号、顿号也吃），非法片段直接丢弃而不是整串失败。
+     *
+     * 纯函数、不碰 android.graphics：图标与单测共用同一套解析。
+     */
+    fun splitHexes(raw: String?): List<String> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return raw.split(',', '，', ';', '；', '|', '、', ' ')
+            .map { it.trim() }
+            .mapNotNull { part ->
+                val body = HEX_PART.find(part)?.groupValues?.get(1) ?: return@mapNotNull null
+                "#" + body.uppercase()
+            }
     }
 
     fun lot(p: Part): String = get(p, FilamentKeys.LOT)
