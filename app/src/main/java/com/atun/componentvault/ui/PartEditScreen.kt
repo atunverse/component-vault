@@ -294,7 +294,7 @@ internal fun paramsToJson(text: String): String {
         }
     }
     return if (pairs.isEmpty()) "{}"
-    else pairs.joinToString(prefix = "{", postfix = "}") { (k, v) ->
+    else pairs.joinToString(separator = ",", prefix = "{", postfix = "}") { (k, v) ->
         "\"" + esc(k) + "\":\"" + esc(v) + "\""
     }
 }
