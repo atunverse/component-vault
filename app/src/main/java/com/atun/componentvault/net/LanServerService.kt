@@ -102,7 +102,7 @@ class LanServerService : Service() {
                 val body = buildJsonObject {
                     put("ok", true)
                     put("app", "ComponentVault")
-                    put("version", "0.1.0")
+                    put("version", com.atun.componentvault.BuildConfig.VERSION_NAME)
                 }
                 call.respondText(body.toString(), ContentType.Application.Json)
             }
@@ -118,6 +118,7 @@ class LanServerService : Service() {
                 val body = buildJsonObject {
                     put("kinds", s.totalKinds)
                     put("qty", s.totalQty)
+                    put("qtyText", com.atun.componentvault.data.fmtQty(s.totalQty))
                     put("low", s.lowKinds)
                     put("out", s.outKinds)
                 }
@@ -445,7 +446,7 @@ function load(){
     ALL = list; render();
   });
   fetch('/api/stats').then(function(r){return r.json()}).then(function(s){
-    document.getElementById('stat').textContent = s.kinds+' 种 · 共 '+s.qty+' · 低库存 '+s.low+' · 缺货 '+s.out;
+    document.getElementById('stat').textContent = s.kinds+' 种 · 共 '+(s.qtyText||s.qty)+' · 低库存 '+s.low+' · 缺货 '+s.out;
   });
 }
 function move(id,sign){
