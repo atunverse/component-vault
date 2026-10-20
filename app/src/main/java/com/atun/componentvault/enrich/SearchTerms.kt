@@ -39,7 +39,10 @@ object SearchTerms {
     fun primary(terms: List<String>): String {
         if (terms.isEmpty()) return ""
         if (terms.size == 1) return terms[0]
-        return terms.firstOrNull { t -> t.length >= 3 && t.any { it.isDigit() } }
+        // 含数字的词里取**最长**的那个：`STM32 F103C8T6` 两个都含数字，
+        // 但只有后者是完整料号，用 STM32 去查会返回整个系列几十条
+        val numeric = terms.filter { t -> t.length >= 3 && t.any { it.isDigit() } }
+        return numeric.maxByOrNull { it.length }
             ?: terms.maxByOrNull { it.length }
             ?: terms[0]
     }
