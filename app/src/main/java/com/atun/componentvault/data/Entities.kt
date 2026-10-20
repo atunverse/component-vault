@@ -36,6 +36,15 @@ object Domains {
         else -> domain
     }
 
+    /** 库存页标题。三个主分类的用词和底部导航保持一致 */
+    fun pageTitle(domain: String): String = when (domain) {
+        FILAMENT -> "3D 打印耗材"
+        HARDWARE -> "五金工具"
+        ELECTRONICS -> "电子元件"
+        TOOL -> "工具量具"
+        else -> "其他物料"
+    }
+
     /** 各物料域的默认可选单位，录入时给快捷 Chip */
     fun units(domain: String): List<String> = when (domain) {
         FILAMENT -> listOf("g", "kg", "卷")

@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -44,6 +46,7 @@ import androidx.compose.ui.unit.sp
 import com.atun.componentvault.BuildConfig
 import com.atun.componentvault.CrashGuard
 import com.atun.componentvault.Graph
+import com.atun.componentvault.data.Domains
 import com.atun.componentvault.data.IconStore
 import com.atun.componentvault.data.VaultRepository
 import com.atun.componentvault.data.Part
@@ -66,7 +69,7 @@ private data class BomMatch(
 )
 
 @Composable
-fun BomScreen() {
+fun BomScreen(onBack: () -> Unit = {}) {
     var parts by remember { mutableStateOf<List<Part>>(emptyList()) }
     var text by remember {
         mutableStateOf("型号,数量\n10kΩ,50\n100nF,200\nSS34,20\nTPS5430DDA,2\nAO3400,30")
@@ -83,6 +86,7 @@ fun BomScreen() {
             .verticalScroll(rememberScrollState())
             .padding(14.dp)
     ) {
+        SubScreenBar("BOM 比对", onBack)
         Text("BOM 分析", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(4.dp))
         Text(
@@ -234,7 +238,7 @@ private fun analyze(text: String, parts: List<Part>): List<BomMatch> {
 // ---------------------------------------------------------------- 局域网
 
 @Composable
-fun LanScreen() {
+fun LanScreen(onBack: () -> Unit = {}) {
     val ctx = LocalContext.current
     var running by remember { mutableStateOf(LanServerService.isRunning) }
     var portText by remember { mutableStateOf(LanServerService.DEFAULT_PORT.toString()) }
@@ -262,6 +266,7 @@ fun LanScreen() {
             .verticalScroll(rememberScrollState())
             .padding(14.dp)
     ) {
+        SubScreenBar("局域网", onBack)
         Text("局域网管理", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(4.dp))
         Text(
@@ -380,7 +385,7 @@ private fun Tips(kind: Int) {
 // ---------------------------------------------------------------- 我的
 
 @Composable
-fun MeScreen() {
+fun MeScreen(onOpenBom: () -> Unit = {}, onOpenLan: () -> Unit = {}) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var testing by remember { mutableStateOf(false) }
@@ -396,6 +401,19 @@ fun MeScreen() {
             .padding(14.dp)
     ) {
         Text("我的", style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(12.dp))
+
+        // BOM 与局域网从底部导航收进来：它们是偶尔用的工具，不是日常主路径
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(Modifier.padding(6.dp)) {
+                ToolEntry("BOM 比对", "粘贴清单，自动算出缺多少、够不够") { onOpenBom() }
+                ToolEntry("局域网管理", "电脑浏览器改仓位、导出数据") { onOpenLan() }
+            }
+        }
         Spacer(Modifier.height(14.dp))
 
         crashText?.let { crash ->
@@ -521,6 +539,9 @@ fun MeScreen() {
         }
 
         Spacer(Modifier.height(14.dp))
+        LcscRefreshCard()
+
+        Spacer(Modifier.height(14.dp))
         IconMaintenanceCard()
 
         Spacer(Modifier.height(14.dp))
@@ -545,6 +566,116 @@ fun MeScreen() {
             fontSize = 10.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+/**
+ * 立创信息批量刷新。
+ *
+ * 解决的是「老库存没有立创号」这件事：没有号 → 抓不到图、没有商品页、没有手册、没有单价。
+ * 这个卡片用型号（没型号就用名称）把它们逐条重新查一遍，查到就把号和图一起补上。
+ * 已经有立创号的器件不参与，避免覆盖用户核对过的对应关系。
+ */
+@Composable
+private fun LcscRefreshCard() {
+    val scope = rememberCoroutineScope()
+    var missing by remember { mutableStateOf(-1) }
+    var prog by remember { mutableStateOf<VaultRepository.RefreshBatch?>(null) }
+    var running by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        missing = Graph.repo.allParts().count {
+            (it.domain == Domains.ELECTRONICS || it.domain == Domains.HARDWARE) &&
+                it.lcscCode.isBlank()
+        }
+    }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text("立创信息", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "按型号或名称重新检索，命中后补上立创号、商品页、封装、单价、手册与图片。" +
+                    "只查还没有立创号的器件。",
+                fontSize = 10.5.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            InfoRow(
+                "待补立创号",
+                when {
+                    missing < 0 -> "统计中…"
+                    missing == 0 -> "全部都有"
+                    else -> "$missing 件"
+                }
+            )
+
+            val p = prog
+            if (p != null && p.running) {
+                Spacer(Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { if (p.total == 0) 0f else p.done.toFloat() / p.total },
+                    modifier = Modifier.fillMaxWidth().height(6.dp)
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "已查 ${p.done} / ${p.total} · 命中 ${p.hit}",
+                    fontSize = 10.5.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (p.lastMessage.isNotBlank()) {
+                    Text(
+                        p.lastMessage,
+                        fontSize = 9.5.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            if (p != null && !p.running) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "完成：命中 ${p.hit} / ${p.total}",
+                    fontSize = 10.5.sp,
+                    color = if (p.hit > 0) Color(0xFF059669) else Color(0xFFD97706)
+                )
+                if (p.lastMessage.isNotBlank()) {
+                    Text(
+                        p.lastMessage,
+                        fontSize = 9.5.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Button(
+                enabled = !running && (missing > 0),
+                onClick = {
+                    running = true
+                    scope.launch {
+                        val r = Graph.repo.refreshMissingLcsc { prog = it }
+                        prog = r
+                        running = false
+                        missing = Graph.repo.allParts().count {
+                            (it.domain == Domains.ELECTRONICS || it.domain == Domains.HARDWARE) &&
+                                it.lcscCode.isBlank()
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (running) "检索中…" else "批量按型号检索")
+            }
+        }
     }
 }
 
@@ -651,5 +782,44 @@ private fun InfoRow(label: String, value: String) {
             modifier = Modifier.width(96.dp)
         )
         Text(value, fontSize = 11.5.sp)
+    }
+}
+
+/** 二级页顶部返回行 */
+@Composable
+private fun SubScreenBar(title: String, onBack: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = onBack) { Text("← 返回", fontSize = 12.sp) }
+        Text(
+            title,
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+/** 「我的」页里的工具入口 */
+@Composable
+private fun ToolEntry(title: String, subtitle: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 13.sp)
+            Text(
+                subtitle,
+                fontSize = 9.5.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Text("›", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

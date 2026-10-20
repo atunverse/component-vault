@@ -75,8 +75,8 @@ private data class CreateSeed(
 )
 
 @Composable
-fun CaptureScreen() {
-    var domain by remember { mutableStateOf(Domains.ELECTRONICS) }
+fun CaptureScreen(initialDomain: String = Domains.ELECTRONICS) {
+    var domain by remember { mutableStateOf(initialDomain) }
     var input by remember { mutableStateOf("") }
     var seed by remember { mutableStateOf<CreateSeed?>(null) }
     var savedName by remember { mutableStateOf("") }
@@ -620,6 +620,23 @@ private fun CreateForm(seed: CreateSeed, onSave: (Part) -> Unit) {
         )
     }
     var note by remember(seed) { mutableStateOf("") }
+    var brandText by remember(seed) { mutableStateOf(seed.brand) }
+
+    // 耗材走专用表单：材料/颜色/净重/空盘重都从预设里选，避免手打十几个键值对
+    var filament by remember(seed) {
+        mutableStateOf(
+            FilamentDraft.of(
+                Part(
+                    internalCode = "",
+                    name = seed.name,
+                    category = seed.category,
+                    domain = seed.domain,
+                    packageName = seed.packageName,
+                    paramsJson = paramsToJsonString(seed.params)
+                )
+            )
+        )
+    }
 
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -700,7 +717,7 @@ private fun CreateForm(seed: CreateSeed, onSave: (Part) -> Unit) {
                 OutlinedTextField(
                     value = qtyText,
                     onValueChange = { s -> qtyText = s.filter { it.isDigit() || it == '.' }.take(8) },
-                    label = { Text("数量") },
+                    label = { Text(if (seed.domain == Domains.FILAMENT) "剩余（g）" else "数量") },
                     singleLine = true,
                     modifier = Modifier.weight(1f)
                 )
@@ -757,7 +774,21 @@ private fun CreateForm(seed: CreateSeed, onSave: (Part) -> Unit) {
                 modifier = Modifier.fillMaxWidth()
             )
 
-            if (seed.params.isNotEmpty()) {
+            if (seed.domain == Domains.FILAMENT) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "耗材参数",
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                FilamentEditor(
+                    draft = filament,
+                    onChange = { filament = it },
+                    brand = brandText,
+                    onBrandChange = { brandText = it }
+                )
+            } else if (seed.params.isNotEmpty()) {
                 Spacer(Modifier.height(10.dp))
                 Text(
                     "识别到的参数",
@@ -775,19 +806,20 @@ private fun CreateForm(seed: CreateSeed, onSave: (Part) -> Unit) {
             Spacer(Modifier.height(14.dp))
             Button(
                 onClick = {
-                    val paramsJson = buildJsonObject {
-                        seed.params.forEach { (k, v) -> put(k, v) }
-                    }.toString()
+                    val isFilament = seed.domain == Domains.FILAMENT
+                    val finalParams =
+                        if (isFilament) filament.mergeInto(seed.params) else seed.params
+                    val paramsJson = paramsToJsonString(finalParams)
                     onSave(
                         Part(
                             internalCode = "",
                             mpn = mpn.trim(),
                             name = seed.name,
-                            category = seed.category,
+                            category = if (isFilament) filament.material else seed.category,
                             domain = seed.domain,
-                            packageName = seed.packageName,
+                            packageName = if (isFilament) "${filament.diameter}mm" else seed.packageName,
                             spec = seed.spec,
-                            brand = seed.brand,
+                            brand = brandText.trim(),
                             lcscCode = seed.lcscCode,
                             lcscProductId = seed.productId,
                             datasheetUrl = seed.datasheetUrl,
@@ -795,7 +827,8 @@ private fun CreateForm(seed: CreateSeed, onSave: (Part) -> Unit) {
                             tags = seed.tags.joinToString(","),
                             summary = seed.summary,
                             qty = qtyText.toDoubleOrNull() ?: 0.0,
-                            unit = unit.trim().ifBlank { Domains.defaultUnit(seed.domain) },
+                            unit = if (isFilament) "g"
+                            else unit.trim().ifBlank { Domains.defaultUnit(seed.domain) },
                             lowThreshold = lowText.toDoubleOrNull() ?: 0.0,
                             location = location.trim(),
                             price = priceText.toDoubleOrNull() ?: 0.0,

@@ -1,7 +1,10 @@
 package com.atun.componentvault.data
 
 import android.content.Context
+import com.atun.componentvault.enrich.LcscHit
 import com.atun.componentvault.enrich.LcscLink
+import com.atun.componentvault.enrich.LcscMatcher
+import com.atun.componentvault.enrich.LcscResolver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -143,7 +146,7 @@ class VaultRepository(private val db: AppDb, private val appContext: Context) {
     }
 
     /**
-     * 抓一次图标（远程 URL 优先，其次按立创号回查）。
+     * 抓一次图标（远程 URL 优先，其次按立创号/型号回查）。
      * 返回是否成功。失败静默 —— 列表会退回封装文字占位。
      */
     suspend fun fetchIcon(partId: Long): Boolean {
@@ -165,17 +168,204 @@ class VaultRepository(private val db: AppDb, private val appContext: Context) {
         return true
     }
 
-    /** 只有立创号没有图 URL 时，回查一次检索接口 */
+    /**
+     * 只有图 URL 为空时才回查检索接口。
+     *
+     * ★ 这里曾经有个把库存「变成没有图标」的隐蔽缺陷（v0.3.0 实测反馈）：
+     * 早先的实现优先拿 `lcscProductId` 当检索关键词。可立创的商品数字 id（如 9243）
+     * 在它自己的检索里**不是一个有效关键词** —— 搜 `9243` 会返回 160 条毫不相干的结果
+     * （接线端子、音频功放都出来了），再被 LcscMatcher 的 minScore 全部丢弃，于是一律抓不到图。
+     * 立创号（C8734）才是能精确反查的标识，型号（STM32F103C8T6）次之，名称最后兜底。
+     */
     private suspend fun resolveImageUrl(p: Part): String {
-        val key = when {
-            p.lcscProductId > 0 -> p.lcscProductId.toString()
-            p.lcscCode.isNotBlank() -> p.lcscCode
-            else -> return ""
+        val hit = searchByLocalIdentity(p) ?: return ""
+        return hit.imageUrl
+    }
+
+    /**
+     * 按本地已有信息去立创反查一条最可能的记录。
+     * 检索词优先级：立创号 > 型号 > 名称。数字商品 id 不参与检索（见上）。
+     */
+    private suspend fun searchByLocalIdentity(p: Part): LcscHit? {
+        for (key in searchKeys(p)) {
+            val r = LcscResolver.resolve(key)
+            val hits = (r as? LcscResolver.Result.Hits)?.hits ?: continue
+            pickHit(p, hits)?.let { return it }
         }
-        val hit = com.atun.componentvault.enrich.LcscResolver.resolve(key)
-        val hits = (hit as? com.atun.componentvault.enrich.LcscResolver.Result.Hits)?.hits
-            ?: return ""
-        return hits.firstOrNull { it.imageUrl.isNotBlank() }?.imageUrl.orEmpty()
+        return null
+    }
+
+    /** 可用的检索词，去重且保持优先级 */
+    private fun searchKeys(p: Part, extra: String = ""): List<String> {
+        val keys = LinkedHashSet<String>()
+        if (extra.isNotBlank()) keys += extra.trim()
+        if (p.lcscCode.isNotBlank()) keys += p.lcscCode.trim()
+        if (p.mpn.trim().length >= 2) keys += p.mpn.trim()
+        if (p.name.trim().length >= 2) keys += p.name.trim()
+        return keys.toList()
+    }
+
+    /**
+     * 从候选里挑一条。宁可挑不到，也不张冠李戴：
+     * 先认立创号完全相等，再认型号归一化后相等，最后才退回第一条高分结果。
+     */
+    private fun pickHit(p: Part, hits: List<LcscHit>): LcscHit? {
+        if (hits.isEmpty()) return null
+        if (p.lcscCode.isNotBlank()) {
+            hits.firstOrNull { it.lcscCode.equals(p.lcscCode, ignoreCase = true) }?.let { return it }
+        }
+        if (p.mpn.isNotBlank()) {
+            val q = LcscMatcher.normalize(p.mpn)
+            hits.firstOrNull { LcscMatcher.normalize(it.mpn) == q }?.let { return it }
+        }
+        return hits.firstOrNull { it.matchKind != LcscHit.MatchKind.FUZZY } ?: hits.first()
+    }
+
+    /**
+     * 刷新结果。界面直接展示，不用自己拼字符串。
+     * @param message 给用户看的一句话，成功失败都有人话解释
+     */
+    data class RefreshReport(
+        val ok: Boolean,
+        val message: String,
+        val changed: List<String> = emptyList(),
+        val code: String = ""
+    )
+
+    /**
+     * 按名字 / 型号 / 立创号重新获取立创信息，并把能填的都填回去。
+     *
+     * 这是「库存里那些当初没录立创号的老器件」的唯一修复入口：
+     * 点一下 → 用型号去搜 → 命中后补上立创号、商品页、封装、单价、手册、图片。
+     *
+     * 只填**空着的**字段，不覆盖用户手改过的内容（单价除外：原价为 0 才填）。
+     * 图标只在「本来没有图」或「原图来自立创」时替换，不会覆盖用户拍的照片。
+     */
+    suspend fun refreshLcsc(partId: Long, keyword: String = ""): RefreshReport {
+        val p = partDao.byId(partId) ?: return RefreshReport(false, "器件不存在")
+        val keys = searchKeys(p, keyword)
+        if (keys.isEmpty()) return RefreshReport(false, "型号和名称都是空的，没有可检索的内容")
+
+        var reason = "立创未收录该型号"
+        for (key in keys) {
+            when (val r = LcscResolver.resolve(key, forceRefresh = true)) {
+                is LcscResolver.Result.Failed -> reason = "网络不可用：${r.reason}"
+                is LcscResolver.Result.Empty -> reason = "立创检索「$key」没有结果"
+                is LcscResolver.Result.Hits -> {
+                    val hit = pickHit(p, r.hits)
+                    if (hit == null) {
+                        reason = "立创检索「$key」没有结果"
+                    } else {
+                        return applyHit(p, hit, key)
+                    }
+                }
+            }
+        }
+        return RefreshReport(false, reason)
+    }
+
+    /** 批量刷新的进度快照 */
+    data class RefreshBatch(
+        val done: Int = 0,
+        val total: Int = 0,
+        val hit: Int = 0,
+        val lastMessage: String = "",
+        val running: Boolean = false
+    )
+
+    /**
+     * 把「还没有立创号」的电子/五金件批量重新查一遍。
+     *
+     * 只处理 lcscCode 为空的 —— 已经有号的不动，避免把用户核过的对应关系冲掉。
+     * 串行 + 间隔，别把立创检索接口当压力测试打。
+     */
+    suspend fun refreshMissingLcsc(onProgress: (RefreshBatch) -> Unit): RefreshBatch {
+        val targets = partDao.all().filter {
+            (it.domain == Domains.ELECTRONICS || it.domain == Domains.HARDWARE) && it.lcscCode.isBlank()
+        }
+        var done = 0
+        var hit = 0
+        var last = ""
+        onProgress(RefreshBatch(0, targets.size, 0, "", true))
+        for (p in targets) {
+            val r = refreshLcsc(p.id)
+            if (r.ok) hit++
+            if (r.message.isNotBlank()) last = "${p.mpn.ifBlank { p.name }}：${r.message}"
+            done++
+            onProgress(RefreshBatch(done, targets.size, hit, last, true))
+            kotlinx.coroutines.delay(320)
+        }
+        val final = RefreshBatch(done, targets.size, hit, last, false)
+        onProgress(final)
+        return final
+    }
+
+    private suspend fun applyHit(p: Part, hit: LcscHit, key: String): RefreshReport {
+        val changed = mutableListOf<String>()
+
+        val code = if (p.lcscCode.isBlank()) hit.lcscCode else p.lcscCode
+        if (p.lcscCode.isBlank() && hit.lcscCode.isNotBlank()) changed += "立创号 ${hit.lcscCode}"
+
+        val productId = if (hit.productId > 0) hit.productId else p.lcscProductId
+
+        val pkg = if (p.packageName.isBlank()) hit.packageName else p.packageName
+        if (pkg != p.packageName && pkg.isNotBlank()) changed += "封装 $pkg"
+
+        val brand = if (p.brand.isBlank()) hit.brand else p.brand
+        if (brand != p.brand && brand.isNotBlank()) changed += "品牌 $brand"
+
+        val datasheet = if (p.datasheetUrl.isBlank()) hit.datasheetUrl.orEmpty() else p.datasheetUrl
+        if (datasheet != p.datasheetUrl && datasheet.isNotBlank()) changed += "数据手册"
+
+        val price = if (p.price <= 0.0 && hit.unitPrice > 0.0) hit.unitPrice else p.price
+        if (price != p.price) changed += "单价 ¥${fmtQty(price)}"
+
+        val imageUrl = hit.imageUrl.ifBlank { p.iconUrl }
+
+        // 图标：本来没图，或者原本就来自立创，才覆盖；用户拍的照片不动
+        var iconPath = p.iconPath
+        var iconSource = p.iconSource
+        var iconOk = false
+        val mayReplace = p.iconPath.isBlank() || p.iconSource == "lcsc"
+        if (mayReplace && imageUrl.isNotBlank() && IconStore.fromUrl(appContext, p.id, imageUrl)) {
+            iconPath = IconStore.nameFor(p.id)
+            iconSource = "lcsc"
+            iconOk = true
+            if (p.iconPath != iconPath) changed += "图标"
+        }
+
+        partDao.update(
+            p.copy(
+                lcscCode = code,
+                lcscProductId = productId,
+                packageName = pkg,
+                brand = brand,
+                datasheetUrl = datasheet,
+                price = price,
+                iconUrl = imageUrl,
+                iconPath = iconPath,
+                iconSource = iconSource,
+                updatedAt = System.currentTimeMillis()
+            )
+        )
+        txnDao.insert(
+            Txn(
+                partId = p.id,
+                type = "EDIT",
+                delta = 0.0,
+                before = p.qty,
+                after = p.qty,
+                note = "刷新立创信息（检索词「$key」）" +
+                    if (changed.isEmpty()) "" else "：" + changed.joinToString("、")
+            )
+        )
+
+        val message = when {
+            changed.isNotEmpty() -> "已更新：" + changed.joinToString("、")
+            iconOk || p.iconPath.isNotBlank() -> "立创信息已是最新（${code.ifBlank { hit.lcscCode }}）"
+            else -> "立创有这条记录，但没取到图片"
+        }
+        return RefreshReport(true, message, changed, code)
     }
 
     /**
@@ -328,22 +518,33 @@ class VaultRepository(private val db: AppDb, private val appContext: Context) {
                 tags = "工具,内六角", summary = "内六角扳手 9 件套，S2 钢",
                 qty = 1.0, unit = "套", lowThreshold = 0.0, location = "工具柜 第 2 抽", price = 28.0
             ),
-            // ---- 3D 打印耗材示例
+            // ---- 3D 打印耗材示例（字段参照 Spoolman 的 filament + spool 两层）
             Part(
                 internalCode = "", mpn = "PLA 1.75 黑", name = "PLA 线材", category = "PLA",
-                domain = Domains.FILAMENT, packageName = "1.75mm", spec = "直径 1.75mm · 净重 1kg · 黑色",
-                brand = "eSUN",
-                paramsJson = """{"材质":"PLA","直径":"1.75mm","颜色":"黑色","净重":"1000g"}""",
+                domain = Domains.FILAMENT, packageName = "1.75mm",
+                spec = "直径 1.75mm · 净重 1kg · 黑色",
+                brand = "eSUN 易生",
+                paramsJson = """{"材质":"PLA","直径":"1.75","颜色":"黑","颜色值":"#1A1A1A","净重":"1000","空盘重":"190","密度":"1.24","喷嘴温度":"195-215","热床温度":"55-65","批次号":"","开封日期":""}""",
                 tags = "VORON,外壳件,易打印", summary = "PLA 1.75mm 黑色，1kg 盘装，易打印适合外观件",
-                qty = 734.0, unit = "g", lowThreshold = 200.0, location = "耗材架 第 1 层", price = 0.09
+                qty = 734.0, unit = "g", lowThreshold = 200.0, location = "耗材架 第 1 层", price = 89.0
             ),
             Part(
                 internalCode = "", mpn = "PETG 1.75 透明", name = "PETG 线材", category = "PETG",
-                domain = Domains.FILAMENT, packageName = "1.75mm", spec = "直径 1.75mm · 净重 1kg · 透明",
+                domain = Domains.FILAMENT, packageName = "1.75mm",
+                spec = "直径 1.75mm · 净重 1kg · 透明",
                 brand = "Polymaker",
-                paramsJson = """{"材质":"PETG","直径":"1.75mm","颜色":"透明","净重":"1000g"}""",
+                paramsJson = """{"材质":"PETG","直径":"1.75","颜色":"透明","颜色值":"#E3F2FD","净重":"1000","空盘重":"220","密度":"1.27","喷嘴温度":"230-250","热床温度":"75-85","批次号":"","开封日期":""}""",
                 tags = "VORON,结构件,耐温", summary = "PETG 1.75mm 透明，1kg 盘装，韧性与耐温优于 PLA",
-                qty = 120.0, unit = "g", lowThreshold = 250.0, location = "耗材架 第 2 层", price = 0.12
+                qty = 120.0, unit = "g", lowThreshold = 250.0, location = "耗材架 第 2 层", price = 109.0
+            ),
+            Part(
+                internalCode = "", mpn = "TPU 1.75 黑", name = "TPU 柔性线材", category = "TPU",
+                domain = Domains.FILAMENT, packageName = "1.75mm",
+                spec = "直径 1.75mm · 净重 0.5kg · 黑色 · 95A",
+                brand = "三绿 SUNLU",
+                paramsJson = """{"材质":"TPU","直径":"1.75","颜色":"黑","颜色值":"#1A1A1A","净重":"500","空盘重":"190","密度":"1.21","喷嘴温度":"210-235","热床温度":"30-50","批次号":"","开封日期":""}""",
+                tags = "柔性,密封圈,减震", summary = "TPU 95A 1.75mm 黑色，0.5kg 盘装，慢速打印",
+                qty = 420.0, unit = "g", lowThreshold = 100.0, location = "耗材架 第 3 层", price = 79.0
             )
         )
         demo.forEach { create(it) }
@@ -351,8 +552,25 @@ class VaultRepository(private val db: AppDb, private val appContext: Context) {
 
     /** 幂等：ParamDef 主键是 (category, key)，重复 upsert 只会刷新标签，不会产生重复行 */
     private suspend fun seedParamDefs() {
-        paramDao.upsertAll(
+        // 耗材分类的参数模板按预设材料批量生成：新增一种材料只需要改 FilamentPresets，
+        // 不用回来补 ParamDef，也不会漏掉某一种材料的温度项。
+        val filamentDefs = com.atun.componentvault.enrich.FilamentPresets.MATERIALS.flatMap { m ->
             listOf(
+                ParamDef(m.name, FilamentKeys.MATERIAL, "材质", "", "text", 1),
+                ParamDef(m.name, FilamentKeys.DIAMETER, "线径", "mm", "number", 2),
+                ParamDef(m.name, FilamentKeys.COLOR, "颜色", "", "text", 3),
+                ParamDef(m.name, FilamentKeys.COLOR_HEX, "颜色色值", "", "text", 4),
+                ParamDef(m.name, FilamentKeys.NET_WEIGHT, "标称净重", "g", "number", 5),
+                ParamDef(m.name, FilamentKeys.SPOOL_WEIGHT, "空盘重", "g", "number", 6),
+                ParamDef(m.name, FilamentKeys.DENSITY, "密度", "g/cm³", "number", 7),
+                ParamDef(m.name, FilamentKeys.NOZZLE, "喷嘴温度", "℃", "text", 8),
+                ParamDef(m.name, FilamentKeys.BED, "热床温度", "℃", "text", 9),
+                ParamDef(m.name, FilamentKeys.LOT, "批次号", "", "text", 10),
+                ParamDef(m.name, FilamentKeys.OPENED_AT, "开封日期", "", "text", 11)
+            )
+        }
+        paramDao.upsertAll(
+            filamentDefs + listOf(
                 ParamDef("电阻", "阻值", "阻值", "Ω", "text", 1),
                 ParamDef("电阻", "精度", "精度", "", "text", 2),
                 ParamDef("电阻", "功率", "额定功率", "W", "text", 3),
@@ -399,23 +617,8 @@ class VaultRepository(private val db: AppDb, private val appContext: Context) {
                 ParamDef("螺丝刀", "头型", "头型", "", "text", 2),
                 ParamDef("量具", "量程", "量程", "mm", "text", 1),
                 ParamDef("量具", "分辨率", "分辨率", "mm", "text", 2),
-                // ---- 3D 耗材
-                ParamDef("PLA", "材质", "材质", "", "text", 1),
-                ParamDef("PLA", "直径", "线径", "mm", "text", 2),
-                ParamDef("PLA", "颜色", "颜色", "", "text", 3),
-                ParamDef("PLA", "净重", "净重", "g", "text", 4),
-                ParamDef("PETG", "材质", "材质", "", "text", 1),
-                ParamDef("PETG", "直径", "线径", "mm", "text", 2),
-                ParamDef("PETG", "颜色", "颜色", "", "text", 3),
-                ParamDef("PETG", "净重", "净重", "g", "text", 4),
-                ParamDef("ABS", "材质", "材质", "", "text", 1),
-                ParamDef("ABS", "直径", "线径", "mm", "text", 2),
-                ParamDef("ABS", "颜色", "颜色", "", "text", 3),
-                ParamDef("ABS", "净重", "净重", "g", "text", 4),
-                ParamDef("TPU", "材质", "材质", "", "text", 1),
-                ParamDef("TPU", "直径", "线径", "mm", "text", 2),
-                ParamDef("TPU", "颜色", "颜色", "", "text", 3),
-                ParamDef("TPU", "净重", "净重", "g", "text", 4)
+                // ---- 3D 耗材的参数模板已在上方按 FilamentPresets 批量生成
+                ParamDef("其他", "说明", "说明", "", "text", 1)
             )
         )
     }

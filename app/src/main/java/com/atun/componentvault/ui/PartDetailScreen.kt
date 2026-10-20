@@ -81,6 +81,9 @@ fun PartDetailScreen(partId: Long, onBack: () -> Unit, onEdit: () -> Unit) {
     var confirmingDelete by remember { mutableStateOf(false) }
     var txns by remember { mutableStateOf<List<Txn>>(emptyList()) }
     var refreshTick by remember { mutableStateOf(0) }
+    var lcscBusy by remember { mutableStateOf(false) }
+    var lcscMsg by remember { mutableStateOf<String?>(null) }
+    var lcscOk by remember { mutableStateOf(false) }
 
     val p = part
     LaunchedEffect(partId, p?.qty, p?.updatedAt, refreshTick) {
@@ -223,27 +226,6 @@ fun PartDetailScreen(partId: Long, onBack: () -> Unit, onEdit: () -> Unit) {
                         }
                     }
 
-                    // 3D 耗材：剩余比例条，一眼看出还能打多少
-                    if (p.domain == Domains.FILAMENT) {
-                        val net = netWeightOf(p)
-                        val pct = p.filamentPercent(net)
-                        if (pct != null) {
-                            Spacer(Modifier.height(10.dp))
-                            LinearProgressIndicator(
-                                progress = { pct },
-                                modifier = Modifier.fillMaxWidth().height(7.dp),
-                                color = if (pct < 0.2f) Color(0xFFD97706) else MaterialTheme.colorScheme.primary,
-                                trackColor = MaterialTheme.colorScheme.surfaceVariant
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                "剩余 ${(pct * 100).toInt()}%　（整盘 ${fmtQty(net ?: 0.0)}g）",
-                                fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
                     Spacer(Modifier.height(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
@@ -258,9 +240,17 @@ fun PartDetailScreen(partId: Long, onBack: () -> Unit, onEdit: () -> Unit) {
                 }
             }
 
+            if (p.domain == Domains.FILAMENT) {
+                Spacer(Modifier.height(12.dp))
+                FilamentCard(p)
+            }
+
             // ------------------------------------------------------ 链接
             val productUrl = if (p.hasLcscAny) Graph.repo.productUrl(p) else ""
-            if (productUrl.isNotBlank() || p.datasheetUrl.isNotBlank() || p.lcscCode.isNotBlank()) {
+            val canRefreshLcsc = p.domain == Domains.ELECTRONICS || p.domain == Domains.HARDWARE
+            if (productUrl.isNotBlank() || p.datasheetUrl.isNotBlank() ||
+                p.lcscCode.isNotBlank() || canRefreshLcsc
+            ) {
                 Spacer(Modifier.height(12.dp))
                 Surface(
                     color = MaterialTheme.colorScheme.surface,
@@ -284,6 +274,39 @@ fun PartDetailScreen(partId: Long, onBack: () -> Unit, onEdit: () -> Unit) {
                         }
                         if (productUrl.isNotBlank()) {
                             LinkRow("复制商品链接", "分享给电脑端用") { copyText(ctx, productUrl) }
+                        }
+                        // 老库存往往没有立创号，图标/价格/手册也就一直空着。
+                        // 这一行是它们的修复入口：用型号或名称重新去立创查一遍。
+                        if (p.domain == Domains.ELECTRONICS || p.domain == Domains.HARDWARE) {
+                            LinkRow(
+                                "刷新立创信息",
+                                when {
+                                    lcscBusy -> "正在按型号检索…"
+                                    lcscMsg != null -> lcscMsg!!
+                                    p.lcscCode.isBlank() -> "没有立创号？按「${p.mpn.ifBlank { p.name }}」查一次"
+                                    else -> "重新拉取封装 / 价格 / 手册 / 图片"
+                                }
+                            ) {
+                                if (!lcscBusy) {
+                                    lcscBusy = true
+                                    lcscMsg = null
+                                    scope.launch {
+                                        val r = Graph.repo.refreshLcsc(p.id)
+                                        lcscOk = r.ok
+                                        lcscMsg = r.message
+                                        lcscBusy = false
+                                        refreshTick++
+                                    }
+                                }
+                            }
+                            if (lcscMsg != null) {
+                                Text(
+                                    lcscMsg!!,
+                                    fontSize = 9.5.sp,
+                                    color = if (lcscOk) Color(0xFF059669) else Color(0xFFD97706),
+                                    modifier = Modifier.padding(start = 2.dp, bottom = 4.dp)
+                                )
+                            }
                         }
                         // 五金件命中率不稳，给一个能自己去找的入口
                         if (p.domain == Domains.HARDWARE) {
@@ -621,13 +644,6 @@ private fun copyText(ctx: Context, text: String) {
 private fun parseParams(json: String): List<Pair<String, String>> = runCatching {
     Json.parseToJsonElement(json).jsonObject.entries.map { it.key to it.value.jsonPrimitive.content }
 }.getOrDefault(emptyList())
-
-/** 从参数里取净重（克），供耗材进度条用 */
-internal fun netWeightOf(p: Part): Double? {
-    val s = parseParams(p.paramsJson).firstOrNull { it.first == "净重" }?.second ?: return null
-    val num = Regex("""(\d+(?:\.\d+)?)""").find(s)?.groupValues?.get(1)?.toDoubleOrNull() ?: return null
-    return if (s.contains("kg", ignoreCase = true)) num * 1000 else num
-}
 
 private fun timeText(ts: Long): String =
     SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(ts))

@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.atun.componentvault.Graph
 import com.atun.componentvault.data.Domains
+import com.atun.componentvault.data.FilamentInfo
 import com.atun.componentvault.data.Part
 import com.atun.componentvault.data.fmtQty
 import kotlinx.coroutines.launch
@@ -94,6 +95,7 @@ fun PartEditScreen(partId: Long, onBack: () -> Unit, onSaved: () -> Unit = onBac
             }.getOrDefault("")
         )
     }
+    var filament by remember(p.id) { mutableStateOf(FilamentDraft.of(p)) }
     var error by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
 
@@ -149,6 +151,18 @@ fun PartEditScreen(partId: Long, onBack: () -> Unit, onSaved: () -> Unit = onBac
             }
             Spacer(Modifier.height(10.dp))
 
+            // 耗材：材料/颜色/净重/空盘重/温度全部走预设，键名与 FilamentInfo 对齐
+            if (domain == Domains.FILAMENT) {
+                SectionLabel("耗材参数")
+                FilamentEditor(
+                    draft = filament,
+                    onChange = { filament = it },
+                    brand = brand,
+                    onBrandChange = { brand = it }
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+
             Field("型号 / 规范名", mpn) { mpn = it }
             Field("名称", name) { name = it }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -193,15 +207,17 @@ fun PartEditScreen(partId: Long, onBack: () -> Unit, onSaved: () -> Unit = onBac
             Field("数据手册 URL", datasheet) { datasheet = it.trim() }
             Spacer(Modifier.height(10.dp))
 
-            SectionLabel("参数（每行「键=值」）")
-            OutlinedTextField(
-                value = paramsText,
-                onValueChange = { paramsText = it },
-                modifier = Modifier.fillMaxWidth().height(120.dp),
-                textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                shape = RoundedCornerShape(10.dp)
-            )
-            Spacer(Modifier.height(10.dp))
+            if (domain != Domains.FILAMENT) {
+                SectionLabel("参数（每行「键=值」）")
+                OutlinedTextField(
+                    value = paramsText,
+                    onValueChange = { paramsText = it },
+                    modifier = Modifier.fillMaxWidth().height(120.dp),
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    shape = RoundedCornerShape(10.dp)
+                )
+                Spacer(Modifier.height(10.dp))
+            }
 
             Field("标签（逗号分隔）", tags) { tags = it }
             Field("一句话简介", summary) { summary = it }
@@ -218,7 +234,13 @@ fun PartEditScreen(partId: Long, onBack: () -> Unit, onSaved: () -> Unit = onBac
                 onClick = {
                     val low = lowText.toDoubleOrNull() ?: 0.0
                     val price = priceText.toDoubleOrNull() ?: 0.0
-                    val json = paramsToJson(paramsText)
+                    val isFilament = domain == Domains.FILAMENT
+                    // 耗材：以库里原有参数为底，再覆盖表单管理的那些键，其它自建参数不丢
+                    val json = if (isFilament) {
+                        paramsToJsonString(filament.mergeInto(FilamentInfo.params(p)))
+                    } else {
+                        paramsToJson(paramsText)
+                    }
                     saving = true
                     scope.launch {
                         val ok = Graph.repo.updateEditable(
@@ -226,8 +248,8 @@ fun PartEditScreen(partId: Long, onBack: () -> Unit, onSaved: () -> Unit = onBac
                                 domain = domain,
                                 mpn = mpn.trim(),
                                 name = name.trim(),
-                                category = category.trim(),
-                                packageName = packageName.trim(),
+                                category = if (isFilament) filament.material else category.trim(),
+                                packageName = if (isFilament) "${filament.diameter}mm" else packageName.trim(),
                                 spec = spec.trim(),
                                 brand = brand.trim(),
                                 unit = unit.trim().ifBlank { "个" },

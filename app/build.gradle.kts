@@ -14,8 +14,8 @@ android {
         applicationId = "com.atun.componentvault"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "0.3.0"
+        versionCode = 5
+        versionName = "0.4.0"
         vectorDrawables { useSupportLibrary = true }
     }
 

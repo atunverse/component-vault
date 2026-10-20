@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.atun.componentvault.Graph
 import com.atun.componentvault.data.Domains
+import com.atun.componentvault.data.FilamentInfo
 import com.atun.componentvault.data.Part
 import com.atun.componentvault.data.fmtQty
 
@@ -55,8 +56,19 @@ private sealed interface Route {
     data class Edit(val id: Long) : Route
 }
 
+/**
+ * 单个物料域的库存页。
+ *
+ * 底部导航的三个分类页共用这一个实现，只换 [domain]：
+ * 电子元件 / 五金工具 / 3D 打印耗材。搜索词由根节点持有，
+ * 所以三个页面的搜索框位置、内容、行为完全一致 —— 也就是「同一位置检索所有分类」。
+ */
 @Composable
-fun StockScreen() {
+fun StockScreen(
+    domain: String,
+    query: String,
+    onQuery: (String) -> Unit
+) {
     var route by remember { mutableStateOf<Route>(Route.List) }
     var adjusting by remember { mutableStateOf<Part?>(null) }
 
@@ -69,6 +81,9 @@ fun StockScreen() {
 
     when (val r = route) {
         Route.List -> StockList(
+            domain = domain,
+            query = query,
+            onQuery = onQuery,
             onOpen = { route = Route.Detail(it.id) },
             onAdjust = { adjusting = it }
         )
@@ -92,63 +107,74 @@ fun StockScreen() {
 }
 
 @Composable
-private fun StockList(onOpen: (Part) -> Unit, onAdjust: (Part) -> Unit) {
+private fun StockList(
+    domain: String,
+    query: String,
+    onQuery: (String) -> Unit,
+    onOpen: (Part) -> Unit,
+    onAdjust: (Part) -> Unit
+) {
     val flow = remember { Graph.repo.observeParts() }
     val parts by flow.collectAsStateWithLifecycle(initialValue = emptyList())
 
-    var query by remember { mutableStateOf("") }
-    var domain by remember { mutableStateOf("全部") }
-    var category by remember { mutableStateOf("全部") }
+    var category by remember(domain) { mutableStateOf("全部") }
     var onlyLow by remember { mutableStateOf(false) }
 
-    // 切物料域时分类筛选会复位，否则会出现「五金域 + 电阻分类」的零结果死局
-    val categories = remember(parts, domain) {
-        listOf("全部") + parts
-            .filter { domain == "全部" || it.domain == domain }
-            .map { it.category }
-            .filter { it.isNotBlank() }
-            .distinct()
-            .sorted()
+    val searching = query.isNotBlank()
+
+    // 搜到的结果跨域；没搜索时只看当前分类页的域
+    val scoped = remember(parts, domain, searching) {
+        if (searching) parts else parts.filter { it.domain == domain }
     }
 
-    val filtered = remember(parts, query, domain, category, onlyLow) {
+    val categories = remember(scoped, domain) {
+        listOf("全部") + scoped.map { it.category }.filter { it.isNotBlank() }.distinct().sorted()
+    }
+
+    val filtered = remember(scoped, query, category, onlyLow, searching) {
         val q = query.trim().lowercase()
-        parts.filter { p ->
-            (domain == "全部" || p.domain == domain) &&
-                (category == "全部" || p.category == category) &&
+        scoped.filter { p ->
+            (searching || category == "全部" || p.category == category) &&
                 (!onlyLow || p.isLow || p.isOut) &&
                 (q.isEmpty() || listOf(
                     p.mpn, p.name, p.category, p.packageName, p.tags,
-                    p.internalCode, p.lcscCode, p.location, p.spec, p.brand
+                    p.internalCode, p.lcscCode, p.location, p.spec, p.brand, p.note
                 ).any { it.lowercase().contains(q) })
         }
     }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 20.dp),
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item {
             StockHeader(
-                kinds = parts.size,
-                qty = parts.sumOf { it.qty },
-                low = parts.count { it.isLow },
-                out = parts.count { it.isOut }
+                title = if (searching) "全库搜索" else Domains.pageTitle(domain),
+                kinds = scoped.size,
+                qtyLabel = if (domain == Domains.FILAMENT && !searching) "总剩余" else "总数量",
+                qty = scoped.sumOf { it.qty },
+                low = scoped.count { it.isLow },
+                out = scoped.count { it.isOut }
             )
         }
+
+        // 搜索框位置固定在统计卡下方，三个分类页一模一样
         item {
             OutlinedTextField(
                 value = query,
-                onValueChange = { query = it },
+                onValueChange = onQuery,
                 modifier = Modifier.fillMaxWidth(),
                 placeholder = {
-                    Text("搜型号 / 规格 / 标签 / 仓位", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        "搜全库：型号 / 名称 / 规格 / 标签 / 仓位",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 },
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                 trailingIcon = {
                     if (query.isNotEmpty()) {
-                        IconButton(onClick = { query = "" }) {
+                        IconButton(onClick = { onQuery("") }) {
                             Icon(Icons.Filled.Close, contentDescription = "清空")
                         }
                     }
@@ -157,34 +183,21 @@ private fun StockList(onOpen: (Part) -> Unit, onAdjust: (Part) -> Unit) {
                 shape = RoundedCornerShape(12.dp)
             )
         }
-        item {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                item {
-                    FilterChip(
-                        selected = domain == "全部",
-                        onClick = { domain = "全部"; category = "全部" },
-                        label = { Text("全部", style = MaterialTheme.typography.labelSmall) }
-                    )
-                }
-                items(Domains.ALL) { d ->
-                    FilterChip(
-                        selected = domain == d,
-                        onClick = { domain = d; category = "全部" },
-                        label = { Text(Domains.label(d), style = MaterialTheme.typography.labelSmall) }
-                    )
-                }
-                item {
-                    FilterChip(
-                        selected = onlyLow,
-                        onClick = { onlyLow = !onlyLow },
-                        label = { Text("只看预警", style = MaterialTheme.typography.labelSmall) }
-                    )
-                }
-            }
-        }
-        if (categories.size > 1) {
+
+        if (searching) {
             item {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "在全部 ${parts.size} 件物料里找到 ${filtered.size} 条",
+                    fontSize = 10.5.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            if (domain == Domains.FILAMENT) {
+                item { FilamentSummary(parts.filter { it.domain == Domains.FILAMENT }) }
+            }
+            item {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     items(categories) { c ->
                         FilterChip(
                             selected = category == c,
@@ -192,15 +205,24 @@ private fun StockList(onOpen: (Part) -> Unit, onAdjust: (Part) -> Unit) {
                             label = { Text(c, fontSize = 10.5.sp) }
                         )
                     }
+                    item {
+                        FilterChip(
+                            selected = onlyLow,
+                            onClick = { onlyLow = !onlyLow },
+                            label = { Text("只看预警", fontSize = 10.5.sp) }
+                        )
+                    }
                 }
             }
         }
+
         if (filtered.isEmpty()) {
-            item { EmptyState(query, parts.isEmpty()) }
+            item { EmptyState(query, parts.isEmpty(), domain) }
         } else {
             items(filtered, key = { it.id }) { p ->
                 PartRow(
                     p = p,
+                    showDomain = searching,
                     onOpen = { onOpen(p) },
                     onAdjust = { onAdjust(p) }
                 )
@@ -210,7 +232,14 @@ private fun StockList(onOpen: (Part) -> Unit, onAdjust: (Part) -> Unit) {
 }
 
 @Composable
-private fun StockHeader(kinds: Int, qty: Double, low: Int, out: Int) {
+private fun StockHeader(
+    title: String,
+    kinds: Int,
+    qtyLabel: String,
+    qty: Double,
+    low: Int,
+    out: Int
+) {
     Surface(
         color = MaterialTheme.colorScheme.primary,
         shape = RoundedCornerShape(14.dp),
@@ -218,14 +247,14 @@ private fun StockHeader(kinds: Int, qty: Double, low: Int, out: Int) {
     ) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
             Text(
-                "我的物料库",
+                title,
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onPrimary
             )
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                 StatCell("品种", kinds.toString())
-                StatCell("总数量", fmtQty(qty))
+                StatCell(qtyLabel, fmtQty(qty))
                 StatCell("低库存", low.toString(), highlight = low > 0)
                 StatCell("缺货", out.toString(), highlight = out > 0)
             }
@@ -260,7 +289,12 @@ private fun StatCell(label: String, value: String, highlight: Boolean = false) {
  * 否则手指要瞄着点。
  */
 @Composable
-private fun PartRow(p: Part, onOpen: () -> Unit, onAdjust: () -> Unit) {
+private fun PartRow(
+    p: Part,
+    showDomain: Boolean,
+    onOpen: () -> Unit,
+    onAdjust: () -> Unit
+) {
     val qtyColor = when {
         p.isOut -> Color(0xFFDC2626)
         p.isLow -> Color(0xFFD97706)
@@ -270,6 +304,11 @@ private fun PartRow(p: Part, onOpen: () -> Unit, onAdjust: () -> Unit) {
         p.isOut -> Color(0xFFFEE2E2)
         p.isLow -> Color(0xFFFEF3C7)
         else -> Color(0xFFD1FAE5)
+    }
+    val subtitle = if (p.domain == Domains.FILAMENT) {
+        listOf(FilamentInfo.subtitle(p), p.location.ifBlank { "未标仓位" }).joinToString(" · ")
+    } else {
+        listOf(p.name, p.packageName, p.lcscCode).filter { it.isNotBlank() }.joinToString(" · ")
     }
 
     Surface(
@@ -293,9 +332,7 @@ private fun PartRow(p: Part, onOpen: () -> Unit, onAdjust: () -> Unit) {
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = listOf(p.name, p.packageName, p.lcscCode)
-                        .filter { it.isNotBlank() }
-                        .joinToString(" · "),
+                    text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -303,19 +340,33 @@ private fun PartRow(p: Part, onOpen: () -> Unit, onAdjust: () -> Unit) {
                 )
                 Spacer(Modifier.height(3.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        Domains.label(p.domain),
-                        fontSize = 9.sp,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        p.location.ifBlank { "未标仓位" },
-                        fontSize = 9.5.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    if (showDomain) {
+                        Text(
+                            Domains.label(p.domain),
+                            fontSize = 9.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    if (p.domain == Domains.FILAMENT) {
+                        ColorDot(FilamentInfo.colorHex(p), 9.dp)
+                        Spacer(Modifier.width(5.dp))
+                        val pct = FilamentInfo.percent(p)
+                        Text(
+                            if (pct != null) "剩余 ${(pct * 100).toInt()}%" else "剩余 ${fmtQty(p.qty)}g",
+                            fontSize = 9.5.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Text(
+                            p.location.ifBlank { "未标仓位" },
+                            fontSize = 9.5.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
             Spacer(Modifier.width(6.dp))
@@ -349,7 +400,7 @@ private fun PartRow(p: Part, onOpen: () -> Unit, onAdjust: () -> Unit) {
 }
 
 @Composable
-private fun EmptyState(query: String, empty: Boolean) {
+private fun EmptyState(query: String, empty: Boolean, domain: String) {
     Column(
         Modifier.fillMaxWidth().padding(vertical = 48.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -358,6 +409,7 @@ private fun EmptyState(query: String, empty: Boolean) {
             when {
                 empty -> "库存还是空的，去「快录」加第一件物料"
                 query.isNotBlank() -> "没有匹配「$query」的物料"
+                domain == Domains.FILAMENT -> "还没有耗材，去「快录」选「3D 耗材」加一盘"
                 else -> "当前筛选下没有物料"
             },
             style = MaterialTheme.typography.bodyMedium,

@@ -69,19 +69,23 @@ object IconCache {
 
     fun load(ctx: Context, fileName: String): ImageBitmap? {
         if (fileName.isBlank()) return null
-        cache.get(fileName)?.let { return it }
         val f = IconStore.fileOf(ctx, fileName)
         if (!f.exists()) return null
-        // 已经落盘成 <=192px 的 JPEG，still 用 inSampleSize 兜底，防止历史遗留大图
+        // 缓存键带上文件修改时间：同一张图被重新下载覆盖后文件名不变，
+        // 只按文件名缓存会一直显示旧图（v0.3.0「换图标没反应」就是这么来的）。
+        val key = fileName + "#" + f.lastModified()
+        cache.get(key)?.let { return it }
+        // 已经落盘成 <=192px 的 JPEG，仍用 inSampleSize 兜底，防止历史遗留大图
         val opts = BitmapFactory.Options().apply { inSampleSize = 1 }
         val bmp = BitmapFactory.decodeFile(f.absolutePath, opts) ?: return null
         val img = bmp.asImageBitmap()
-        cache.put(fileName, img)
+        cache.put(key, img)
         return img
     }
 
+    /** 缓存键带文件修改时间，按文件名删不到了，直接清空 —— 图标总量只有几百张 */
     fun invalidate(fileName: String) {
-        if (fileName.isNotBlank()) cache.remove(fileName)
+        if (fileName.isNotBlank()) cache.evictAll()
     }
 }
 
