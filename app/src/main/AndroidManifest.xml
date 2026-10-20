@@ -36,6 +36,21 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!--
+          拍照存图标用。走系统相机 Intent（ACTION_IMAGE_CAPTURE）时必须给出
+          content:// 形式的 Uri，否则 Android 7+ 直接抛 FileUriExposedException。
+          刻意不声明 CAMERA 权限：系统相机 App 自带权限，声明了反而要运行时申请。
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
     </application>
 
 </manifest>

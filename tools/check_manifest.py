@@ -53,6 +53,28 @@ def collect_declared_classes(root):
     return declared
 
 
+def app_namespace(root):
+    """从 app/build.gradle.kts 读 namespace，用来判定组件是不是本项目的类"""
+    gradle = os.path.join(root, "app", "build.gradle.kts")
+    try:
+        text = open(gradle, encoding="utf-8").read()
+    except OSError:
+        return "com.atun.componentvault"
+    m = re.search(r'namespace\s*=\s*"([^"]+)"', text)
+    return m.group(1) if m else "com.atun.componentvault"
+
+
+def is_project_component(cname, namespace):
+    """
+    只有本项目自己写的组件才需要"源码里必须有这个类"。
+    provider 常常直接引用库里的类（androidx.core.content.FileProvider），
+    源码里当然找不到 —— 早期版本没区分这一点，会把正常配置判成失败。
+    """
+    if cname.startswith("."):
+        return True
+    return cname.startswith(namespace + ".")
+
+
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else "."
     manifest = os.path.join(root, "app", "src", "main", "AndroidManifest.xml")
@@ -62,6 +84,8 @@ def main():
 
     tree = ET.parse(manifest)
     declared = collect_declared_classes(root)
+    namespace = app_namespace(root)
+    skipped = []
 
     problems = []
     checked = 0
@@ -82,6 +106,9 @@ def main():
                 cname = node.get(ANDROID_NS + "name")
                 if not cname:
                     continue
+                if not is_project_component(cname, namespace):
+                    skipped.append(f"<{tag}> {cname}（库组件，跳过）")
+                    continue
                 checked += 1
                 simple = cname.rsplit(".", 1)[-1]
                 if simple not in declared:
@@ -95,6 +122,8 @@ def main():
             print("  FAIL " + p)
         return 1
 
+    for item in skipped:
+        print("  SKIP " + item)
     print(f"[check_manifest] OK：{checked} 个组件声明都能在源码里找到对应类")
     return 0
 

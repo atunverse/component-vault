@@ -1,17 +1,19 @@
 package com.atun.componentvault.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -20,7 +22,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -28,12 +29,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,43 +44,89 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.atun.componentvault.Graph
+import com.atun.componentvault.data.Domains
 import com.atun.componentvault.data.Part
-import com.atun.componentvault.enrich.Enricher
-import androidx.compose.ui.platform.LocalContext
-import kotlinx.coroutines.launch
+import com.atun.componentvault.data.fmtQty
+
+/** 库存 Tab 内的三级页面栈。只有一个 Long 参数，不需要引 navigation-compose */
+private sealed interface Route {
+    data object List : Route
+    data class Detail(val id: Long) : Route
+    data class Edit(val id: Long) : Route
+}
 
 @Composable
 fun StockScreen() {
+    var route by remember { mutableStateOf<Route>(Route.List) }
+    var adjusting by remember { mutableStateOf<Part?>(null) }
+
+    BackHandler(enabled = route != Route.List) {
+        route = when (val r = route) {
+            is Route.Edit -> Route.Detail(r.id)
+            else -> Route.List
+        }
+    }
+
+    when (val r = route) {
+        Route.List -> StockList(
+            onOpen = { route = Route.Detail(it.id) },
+            onAdjust = { adjusting = it }
+        )
+
+        is Route.Detail -> PartDetailScreen(
+            partId = r.id,
+            onBack = { route = Route.List },
+            onEdit = { route = Route.Edit(r.id) }
+        )
+
+        is Route.Edit -> PartEditScreen(
+            partId = r.id,
+            onBack = { route = Route.Detail(r.id) },
+            onSaved = { route = Route.Detail(r.id) }
+        )
+    }
+
+    adjusting?.let { part ->
+        StockAdjustDialog(part = part, onDismiss = { adjusting = null })
+    }
+}
+
+@Composable
+private fun StockList(onOpen: (Part) -> Unit, onAdjust: (Part) -> Unit) {
     val flow = remember { Graph.repo.observeParts() }
     val parts by flow.collectAsStateWithLifecycle(initialValue = emptyList())
 
     var query by remember { mutableStateOf("") }
+    var domain by remember { mutableStateOf("全部") }
     var category by remember { mutableStateOf("全部") }
-    var adjusting by remember { mutableStateOf<Part?>(null) }
+    var onlyLow by remember { mutableStateOf(false) }
 
-    val categories = remember(parts) {
-        listOf("全部") + parts.map { it.category }
+    // 切物料域时分类筛选会复位，否则会出现「五金域 + 电阻分类」的零结果死局
+    val categories = remember(parts, domain) {
+        listOf("全部") + parts
+            .filter { domain == "全部" || it.domain == domain }
+            .map { it.category }
             .filter { it.isNotBlank() }
             .distinct()
             .sorted()
     }
 
-    val filtered = remember(parts, query, category) {
+    val filtered = remember(parts, query, domain, category, onlyLow) {
         val q = query.trim().lowercase()
         parts.filter { p ->
-            (category == "全部" || p.category == category) &&
+            (domain == "全部" || p.domain == domain) &&
+                (category == "全部" || p.category == category) &&
+                (!onlyLow || p.isLow || p.isOut) &&
                 (q.isEmpty() || listOf(
                     p.mpn, p.name, p.category, p.packageName, p.tags,
-                    p.internalCode, p.lcscCode, p.location
+                    p.internalCode, p.lcscCode, p.location, p.spec, p.brand
                 ).any { it.lowercase().contains(q) })
         }
     }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            start = 14.dp, end = 14.dp, top = 14.dp, bottom = 20.dp
-        ),
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item {
@@ -98,7 +143,7 @@ fun StockScreen() {
                 onValueChange = { query = it },
                 modifier = Modifier.fillMaxWidth(),
                 placeholder = {
-                    Text("搜型号 / 封装 / 标签 / 仓位", style = MaterialTheme.typography.bodySmall)
+                    Text("搜型号 / 规格 / 标签 / 仓位", style = MaterialTheme.typography.bodySmall)
                 },
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                 trailingIcon = {
@@ -113,32 +158,59 @@ fun StockScreen() {
             )
         }
         item {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(categories) { c ->
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                item {
                     FilterChip(
-                        selected = category == c,
-                        onClick = { category = c },
-                        label = { Text(c, style = MaterialTheme.typography.labelSmall) }
+                        selected = domain == "全部",
+                        onClick = { domain = "全部"; category = "全部" },
+                        label = { Text("全部", style = MaterialTheme.typography.labelSmall) }
+                    )
+                }
+                items(Domains.ALL) { d ->
+                    FilterChip(
+                        selected = domain == d,
+                        onClick = { domain = d; category = "全部" },
+                        label = { Text(Domains.label(d), style = MaterialTheme.typography.labelSmall) }
+                    )
+                }
+                item {
+                    FilterChip(
+                        selected = onlyLow,
+                        onClick = { onlyLow = !onlyLow },
+                        label = { Text("只看预警", style = MaterialTheme.typography.labelSmall) }
                     )
                 }
             }
         }
-        if (filtered.isEmpty()) {
-            item { EmptyState(query) }
-        } else {
-            items(filtered, key = { it.id }) { p ->
-                PartRow(p) { adjusting = p }
+        if (categories.size > 1) {
+            item {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(categories) { c ->
+                        FilterChip(
+                            selected = category == c,
+                            onClick = { category = c },
+                            label = { Text(c, fontSize = 10.5.sp) }
+                        )
+                    }
+                }
             }
         }
-    }
-
-    adjusting?.let { part ->
-        StockAdjustDialog(part = part, onDismiss = { adjusting = null })
+        if (filtered.isEmpty()) {
+            item { EmptyState(query, parts.isEmpty()) }
+        } else {
+            items(filtered, key = { it.id }) { p ->
+                PartRow(
+                    p = p,
+                    onOpen = { onOpen(p) },
+                    onAdjust = { onAdjust(p) }
+                )
+            }
+        }
     }
 }
 
 @Composable
-private fun StockHeader(kinds: Int, qty: Int, low: Int, out: Int) {
+private fun StockHeader(kinds: Int, qty: Double, low: Int, out: Int) {
     Surface(
         color = MaterialTheme.colorScheme.primary,
         shape = RoundedCornerShape(14.dp),
@@ -146,14 +218,14 @@ private fun StockHeader(kinds: Int, qty: Int, low: Int, out: Int) {
     ) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
             Text(
-                "元器件库存",
+                "我的物料库",
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onPrimary
             )
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                 StatCell("品种", kinds.toString())
-                StatCell("总件数", qty.toString())
+                StatCell("总数量", fmtQty(qty))
                 StatCell("低库存", low.toString(), highlight = low > 0)
                 StatCell("缺货", out.toString(), highlight = out > 0)
             }
@@ -178,8 +250,17 @@ private fun StatCell(label: String, value: String, highlight: Boolean = false) {
     }
 }
 
+/**
+ * 列表行。**两个独立热区**：
+ *  - 整行 → 详情页
+ *  - 右侧数量药丸 → 出入库
+ *
+ * Compose 里子节点的 clickable 会先消费指针事件，父节点不会再触发，
+ * 所以不需要手写 consume。但数量区必须给足尺寸（这里 56×44dp），
+ * 否则手指要瞄着点。
+ */
 @Composable
-private fun PartRow(p: Part, onClick: () -> Unit) {
+private fun PartRow(p: Part, onOpen: () -> Unit, onAdjust: () -> Unit) {
     val qtyColor = when {
         p.isOut -> Color(0xFFDC2626)
         p.isLow -> Color(0xFFD97706)
@@ -194,32 +275,17 @@ private fun PartRow(p: Part, onClick: () -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth().clickable { onClick() }
+        modifier = Modifier.fillMaxWidth().clickable { onOpen() }
     ) {
         Row(
-            Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            Modifier.padding(start = 10.dp, end = 8.dp, top = 9.dp, bottom = 9.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .background(
-                        MaterialTheme.colorScheme.surfaceVariant,
-                        RoundedCornerShape(9.dp)
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = p.packageName.substringBefore(' ').take(6).ifBlank { "—" },
-                    fontSize = if (p.packageName.length > 6) 9.sp else 10.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            PartIcon(part = p, size = 46.dp, corner = 9.dp)
             Spacer(Modifier.width(11.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    text = p.mpn.ifBlank { p.internalCode },
+                    text = p.displayTitle,
                     style = MaterialTheme.typography.titleMedium,
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
@@ -235,156 +301,67 @@ private fun PartRow(p: Part, onClick: () -> Unit) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                if (p.tags.isNotBlank()) {
-                    Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(3.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = p.tagList.take(3).joinToString("  ") { "#$it" },
-                        fontSize = 10.sp,
-                        color = MaterialTheme.colorScheme.secondary,
+                        Domains.label(p.domain),
+                        fontSize = 9.sp,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        p.location.ifBlank { "未标仓位" },
+                        fontSize = 9.5.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
             }
-            Spacer(Modifier.width(8.dp))
-            Column(horizontalAlignment = Alignment.End) {
-                Box(
-                    modifier = Modifier
-                        .background(qtyBg, RoundedCornerShape(8.dp))
-                        .padding(horizontal = 9.dp, vertical = 3.dp)
-                ) {
+            Spacer(Modifier.width(6.dp))
+
+            // 数量药丸：独立热区，点它只进出库
+            Box(
+                modifier = Modifier
+                    .sizeIn(minWidth = 56.dp, minHeight = 44.dp)
+                    .background(qtyBg, RoundedCornerShape(10.dp))
+                    .clickable(onClick = onAdjust)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        p.qty.toString(),
+                        p.qtyText,
                         color = qtyColor,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp
+                        fontSize = 14.sp,
+                        maxLines = 1
+                    )
+                    Text(
+                        p.unit,
+                        color = qtyColor.copy(alpha = 0.8f),
+                        fontSize = 8.5.sp
                     )
                 }
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    p.location.ifBlank { "未标仓位" },
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
         }
     }
 }
 
 @Composable
-private fun EmptyState(query: String) {
+private fun EmptyState(query: String, empty: Boolean) {
     Column(
         Modifier.fillMaxWidth().padding(vertical = 48.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            if (query.isBlank()) "库存还是空的，去「快录」加第一个器件" else "没有匹配「$query」的器件",
+            when {
+                empty -> "库存还是空的，去「快录」加第一件物料"
+                query.isNotBlank() -> "没有匹配「$query」的物料"
+                else -> "当前筛选下没有物料"
+            },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
-}
-
-@Composable
-private fun StockAdjustDialog(part: Part, onDismiss: () -> Unit) {
-    var amount by remember { mutableStateOf("1") }
-    var inbound by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
-    val ctx = LocalContext.current
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("调整库存 · ${part.mpn.ifBlank { part.internalCode }}") },
-        text = {
-            Column {
-                if (part.lcscCode.isNotBlank()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "立创 ${part.lcscCode}",
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            "商品页 ↗",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .clickable {
-                                    openUrl(ctx, Enricher.knownUrl(part.lcscProductId, part.lcscCode))
-                                }
-                                .padding(vertical = 2.dp)
-                        )
-                        if (part.datasheetUrl.isNotBlank()) {
-                            Spacer(Modifier.width(12.dp))
-                            Text(
-                                "手册 ↗",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier
-                                    .clickable { openUrl(ctx, part.datasheetUrl) }
-                                    .padding(vertical = 2.dp)
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                }
-                Text(
-                    "当前 ${part.qty} 件，仓位 ${part.location.ifBlank { "未标" }}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(12.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    FilterChip(
-                        selected = inbound,
-                        onClick = { inbound = true },
-                        label = { Text("入库", style = MaterialTheme.typography.labelSmall) }
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    FilterChip(
-                        selected = !inbound,
-                        onClick = { inbound = false },
-                        label = { Text("出库", style = MaterialTheme.typography.labelSmall) }
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = amount,
-                    onValueChange = { s -> amount = s.filter { it.isDigit() }.take(6) },
-                    label = { Text("数量") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                error?.let {
-                    Spacer(Modifier.height(8.dp))
-                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                val n = amount.toIntOrNull() ?: 0
-                if (n <= 0) {
-                    error = "请输入大于 0 的数量"
-                    return@TextButton
-                }
-                val delta = if (inbound) n else -n
-                scope.launch {
-                    val r = Graph.repo.moveStock(
-                        partId = part.id,
-                        type = if (inbound) "IN" else "OUT",
-                        delta = delta,
-                        note = "手动调整"
-                    )
-                    if (r.ok) onDismiss() else error = r.message
-                }
-            }) { Text("确定") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        }
-    )
 }

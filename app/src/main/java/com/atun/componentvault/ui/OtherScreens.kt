@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -43,7 +44,10 @@ import androidx.compose.ui.unit.sp
 import com.atun.componentvault.BuildConfig
 import com.atun.componentvault.CrashGuard
 import com.atun.componentvault.Graph
+import com.atun.componentvault.data.IconStore
+import com.atun.componentvault.data.VaultRepository
 import com.atun.componentvault.data.Part
+import com.atun.componentvault.data.fmtQty
 import com.atun.componentvault.net.LanServerService
 import com.atun.componentvault.enrich.LcscResolver
 import kotlinx.coroutines.delay
@@ -52,7 +56,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 
 // ---------------------------------------------------------------- BOM 分析
 
-private data class BomLine(val index: Int, val keyword: String, val need: Int, val raw: String)
+private data class BomLine(val index: Int, val keyword: String, val need: Double, val raw: String)
 
 private data class BomMatch(
     val line: BomLine,
@@ -180,9 +184,9 @@ private fun BomRow(m: BomMatch) {
                 )
             }
             Column(horizontalAlignment = Alignment.End) {
-                Text("需 ${m.line.need}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("需 ${fmtQty(m.line.need)}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
-                    "存 ${m.part?.qty ?: 0}",
+                    "存 ${fmtQty(m.part?.qty ?: 0.0)}",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = color
@@ -204,7 +208,7 @@ private fun analyze(text: String, parts: List<Part>): List<BomMatch> {
         val cells = t.split(',', '\t', '|', ' ').map { it.trim() }.filter { it.isNotEmpty() }
         if (cells.isEmpty()) continue
         val keyword = cells.first()
-        val need = cells.drop(1).mapNotNull { it.toIntOrNull() }.lastOrNull() ?: 1
+        val need = cells.drop(1).mapNotNull { it.toDoubleOrNull() }.lastOrNull() ?: 1.0
         idx++
         val hit = parts.firstOrNull {
             it.mpn.equals(keyword, ignoreCase = true)
@@ -517,6 +521,9 @@ fun MeScreen() {
         }
 
         Spacer(Modifier.height(14.dp))
+        IconMaintenanceCard()
+
+        Spacer(Modifier.height(14.dp))
 
         Surface(
             color = MaterialTheme.colorScheme.surface,
@@ -538,6 +545,99 @@ fun MeScreen() {
             fontSize = 10.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+/**
+ * 图标与存储维护。
+ *
+ * 存在的理由：v0.2.1 及更早录入的器件没有图标字段，
+ * 升级后需要一次性把能抓的图补上；另外换图/删件会留下孤儿文件。
+ */
+@Composable
+private fun IconMaintenanceCard() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var count by remember { mutableStateOf(0) }
+    var missing by remember { mutableStateOf(0) }
+    var bytes by remember { mutableStateOf(0L) }
+    var prog by remember { mutableStateOf<VaultRepository.BackfillProgress?>(null) }
+    var msg by remember { mutableStateOf<String?>(null) }
+    var running by remember { mutableStateOf(false) }
+
+    suspend fun refresh() {
+        count = Graph.repo.countIcons()
+        missing = Graph.repo.missingIconCount()
+        bytes = IconStore.usedBytes(ctx)
+    }
+    LaunchedEffect(Unit) { refresh() }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text("图标与存储", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "图标一律在入库时下载并缩成 192px 存本机，列表渲染读本地文件，断网也能看。",
+                fontSize = 10.5.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(10.dp))
+            InfoRow("已缓存图标", "$count 张")
+            InfoRow("占用空间", String.format("%.1f MB", bytes / 1024.0 / 1024.0))
+            InfoRow("待补图标", "$missing 个")
+
+            val p = prog
+            if (p != null && p.running) {
+                Spacer(Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { if (p.total == 0) 0f else p.done.toFloat() / p.total },
+                    modifier = Modifier.fillMaxWidth().height(6.dp)
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "补图中 ${p.done} / ${p.total} · 成功 ${p.ok}",
+                    fontSize = 10.5.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            msg?.let {
+                Spacer(Modifier.height(6.dp))
+                Text(it, fontSize = 10.5.sp, color = Color(0xFF059669))
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    enabled = !running && missing > 0,
+                    onClick = {
+                        running = true
+                        msg = null
+                        scope.launch {
+                            val r = Graph.repo.backfillIcons { progress -> prog = progress }
+                            msg = if (r.total == 0) "没有需要补图的器件"
+                            else "完成：成功 ${r.ok} / ${r.total}"
+                            running = false
+                            refresh()
+                        }
+                    }
+                ) { Text(if (running) "补图中…" else "为存量器件补图标") }
+                OutlinedButton(
+                    enabled = !running,
+                    onClick = {
+                        scope.launch {
+                            val n = Graph.repo.purgeOrphanIcons()
+                            msg = "已清理 $n 个无主图标文件"
+                            refresh()
+                        }
+                    }
+                ) { Text("清理无主图标", fontSize = 12.sp) }
+            }
+        }
     }
 }
 

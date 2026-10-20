@@ -14,6 +14,10 @@ interface PartDao {
     @Query("SELECT * FROM part ORDER BY updatedAt DESC")
     fun observeAll(): Flow<List<Part>>
 
+    /** 详情页用：直接订阅单条，入库/编辑后页面自动刷新，不需要手动回传 */
+    @Query("SELECT * FROM part WHERE id = :id")
+    fun observeById(id: Long): Flow<Part?>
+
     @Query("SELECT * FROM part ORDER BY updatedAt DESC")
     suspend fun all(): List<Part>
 
@@ -26,14 +30,14 @@ interface PartDao {
     @Query("SELECT * FROM part WHERE mpn = :mpn OR lcscCode = :mpn LIMIT 1")
     suspend fun byMpnOrLcsc(mpn: String): Part?
 
-    @Query("SELECT * FROM part WHERE qty <= lowThreshold ORDER BY qty ASC")
+    @Query("SELECT * FROM part WHERE qty > 0 AND qty <= lowThreshold ORDER BY qty ASC")
     suspend fun lowStock(): List<Part>
 
     @Query("SELECT COUNT(*) FROM part")
     suspend fun kindCount(): Int
 
     @Query("SELECT IFNULL(SUM(qty), 0) FROM part")
-    suspend fun totalQty(): Long
+    suspend fun totalQty(): Double
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(part: Part): Long
@@ -48,7 +52,7 @@ interface PartDao {
     suspend fun delete(part: Part)
 
     @Query("UPDATE part SET qty = :qty, updatedAt = :ts WHERE id = :id")
-    suspend fun setQty(id: Long, qty: Int, ts: Long)
+    suspend fun setQty(id: Long, qty: Double, ts: Long)
 
     @Query("SELECT IFNULL(MAX(id), 0) FROM part")
     suspend fun maxId(): Long
@@ -60,14 +64,17 @@ interface TxnDao {
     @Query("SELECT * FROM txn ORDER BY createdAt DESC LIMIT :limit")
     fun observeRecent(limit: Int): Flow<List<Txn>>
 
-    @Query("SELECT * FROM txn WHERE partId = :partId ORDER BY createdAt DESC")
-    suspend fun forPart(partId: Long): List<Txn>
+    @Query("SELECT * FROM txn WHERE partId = :partId ORDER BY createdAt DESC LIMIT :limit")
+    suspend fun forPart(partId: Long, limit: Int = 30): List<Txn>
 
     @Query("SELECT * FROM txn WHERE idempotencyKey = :key AND idempotencyKey != '' LIMIT 1")
     suspend fun findByIdempotencyKey(key: String): Txn?
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(txn: Txn): Long
+
+    @Query("DELETE FROM txn WHERE partId = :partId")
+    suspend fun deleteForPart(partId: Long)
 }
 
 @Dao

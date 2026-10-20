@@ -36,6 +36,10 @@ data class LcscProduct(
     val name: String = "",
     /** 库存数量，字符串型，可能是空串 */
     val stockNumber: String = "",
+    /** 计量单位：电子件多为「个」，五金件是「支」「盒」等 —— 直接用作入库单位 */
+    val stockUnit: String = "",
+    /** 包装单位，如「盒」 */
+    val packageUnit: String = "",
     /** 多张图用 `<$>` 分隔 */
     val image: String = "",
     /** 数据手册相对路径，拼 https://atta.szlcsc.com 前缀即可下载 */
@@ -162,6 +166,8 @@ data class LcscHit(
     val productUrl: String,
     val datasheetUrl: String?,
     val imageUrl: String,
+    /** 计量单位，来自接口 stockUnit；空串时由调用方按物料域补默认值 */
+    val unit: String = "",
     val score: Int,
     /** 命中方式：C编号 / 型号精确 / 型号前缀 / 模糊，用于界面提示可信度 */
     val matchKind: MatchKind

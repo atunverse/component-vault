@@ -34,7 +34,7 @@ object Graph {
         synchronized(this) {
             if (repository != null) return
             val db = AppDb.get(context)
-            val r = VaultRepository(db)
+            val r = VaultRepository(db, context.applicationContext)
             repository = r
             scope.launch { r.seedIfEmpty() }
         }

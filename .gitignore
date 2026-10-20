@@ -17,3 +17,6 @@ app/build
 ci-debug.p12
 *.p12
 *.keystore
+
+# 本地改动前的源码快照，仅用于回退，不进仓库
+/backups

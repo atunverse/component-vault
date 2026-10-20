@@ -129,6 +129,7 @@ object LcscMatcher {
                     productUrl = LcscLink.best(p.id, p.code),
                     datasheetUrl = LcscLink.datasheet(p.pdfFileUrl),
                     imageUrl = p.firstImage,
+                    unit = p.stockUnit,
                     score = s,
                     matchKind = kindOf(p, query)
                 )

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 暴露给系统相机的目录。
+  只放开 cache/camera 一个子目录 —— 拍照产生的临时文件在这里，
+  导入成图标后立刻删除。不要把 filesDir 整体暴露出去。
+-->
+<paths>
+    <cache-path name="camera" path="camera/" />
+</paths>

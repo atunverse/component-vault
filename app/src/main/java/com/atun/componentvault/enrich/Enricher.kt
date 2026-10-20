@@ -33,6 +33,8 @@ object Enricher {
         val stock: Int = 0,
         val unitPrice: Double = 0.0,
         val imageUrl: String = "",
+        /** 计量单位，来自立创 stockUnit（电子件多为「个」，五金件是「支」「盒」） */
+        val unit: String = "",
         val matchKind: String = ""
     ) {
         val hasLcscLink: Boolean get() = productUrl.isNotBlank()
@@ -122,6 +124,7 @@ object Enricher {
             stock = stock,
             unitPrice = unitPrice,
             imageUrl = imageUrl,
+            unit = unit,
             matchKind = when (matchKind) {
                 LcscHit.MatchKind.CODE -> "立创号精确"
                 LcscHit.MatchKind.EXACT -> "型号精确"
