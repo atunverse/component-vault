@@ -84,10 +84,19 @@ jobs:
       - name: Build debug APK
         run: gradle :app:assembleDebug --no-daemon --stacktrace
 
+      # 产物改成本地化文件名，下载下来一眼能认出是哪个版本，
+      # 不用再去翻 build.gradle.kts 对版本号。
       - name: Collect APK
         run: |
+          set -e
           mkdir -p out
-          cp app/build/outputs/apk/debug/*.apk out/ || true
+          VER=$(sed -n 's/.*versionName *= *"\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
+          if [ -z "$VER" ]; then
+            echo "::error::没能从 app/build.gradle.kts 里读出 versionName"
+            exit 1
+          fi
+          cp app/build/outputs/apk/debug/*.apk "out/ComponentVault-v${VER}-debug.apk"
+          echo "APK_VERSION=$VER"
           ls -la out
 
       # 打包产物级复查：直接读 APK 内的二进制 Manifest 和 dex，
@@ -146,3 +155,4 @@ jobs:
           body: |
             自动构建的调试签名 APK，可直接侧载安装。
             安装前需在手机上允许「安装未知来源应用」。
+            签名密钥固定不变，覆盖安装可直接升级、不会丢数据。
