@@ -339,7 +339,7 @@ class VaultRepository(private val db: AppDb, private val appContext: Context) {
         val direct = (LcscResolver.resolve(code, forceRefresh = true) as? LcscResolver.Result.Hits)
             ?.hits.orEmpty()
         direct.firstOrNull { it.lcscCode.equals(code, ignoreCase = true) }?.let {
-            return applyHit(p, it, "手动选择 $code", override = true)
+            return applyHit(p, it, "手动选择 $code", force = true)
         }
 
         // 有些件按 C 编号反查拿不到（立创偶尔只给商品页不给检索记录），
@@ -349,7 +349,7 @@ class VaultRepository(private val db: AppDb, private val appContext: Context) {
             val rr = LcscResolver.resolve(key, forceRefresh = true)
             val hits = (rr as? LcscResolver.Result.Hits)?.hits.orEmpty()
             hits.firstOrNull { it.lcscCode.equals(code, ignoreCase = true) }?.let {
-                return applyHit(p, it, "手动选择 $code", override = true)
+                return applyHit(p, it, "手动选择 $code", force = true)
             }
         }
         return RefreshReport(false, "没取到 $code 的详情，可能网络不通，稍后再试一次")
