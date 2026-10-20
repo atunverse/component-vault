@@ -9,6 +9,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -127,6 +128,11 @@ fun PartIcon(
 
     val base = modifier
         .size(size)
+        // 白色 / 米白这类浅色耗材在白卡片上会「融」进背景，靠这条细边定住轮廓
+        .then(
+            if (hasColor) Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+            else Modifier
+        )
         .clip(shape)
         .then(
             when {
