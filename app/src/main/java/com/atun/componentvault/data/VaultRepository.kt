@@ -206,8 +206,13 @@ class VaultRepository(private val db: AppDb, private val appContext: Context) {
     }
 
     /**
-     * 从候选里挑一条。宁可挑不到，也不张冠李戴：
-     * 先认立创号完全相等，再认型号归一化后相等，最后才退回第一条高分结果。
+     * 从候选里挑一条。**宁可挑不到，也不张冠李戴**：
+     * 先认立创号完全相等，再认型号归一化后相等，最后只接受「型号前缀」级别的匹配。
+     *
+     * 模糊命中（标题里恰好出现了关键词）一律不要。反例很具体：
+     * 库存里叫「10kΩ」的电阻，搜出来几百个不同封装的贴片电阻，标题都含「10kΩ」；
+     * 随便挑第一条写进 lcscCode，用户下次点「立创商城」就跳到别人的商品页，
+     * 挂上去的图也是别的封装 —— 这种"补全"比空着更糟。
      */
     private fun pickHit(p: Part, hits: List<LcscHit>): LcscHit? {
         if (hits.isEmpty()) return null
@@ -218,7 +223,7 @@ class VaultRepository(private val db: AppDb, private val appContext: Context) {
             val q = LcscMatcher.normalize(p.mpn)
             hits.firstOrNull { LcscMatcher.normalize(it.mpn) == q }?.let { return it }
         }
-        return hits.firstOrNull { it.matchKind != LcscHit.MatchKind.FUZZY } ?: hits.first()
+        return hits.firstOrNull { it.matchKind != LcscHit.MatchKind.FUZZY }
     }
 
     /**
@@ -253,10 +258,12 @@ class VaultRepository(private val db: AppDb, private val appContext: Context) {
                 is LcscResolver.Result.Empty -> reason = "立创检索「$key」没有结果"
                 is LcscResolver.Result.Hits -> {
                     val hit = pickHit(p, r.hits)
-                    if (hit == null) {
-                        reason = "立创检索「$key」没有结果"
+                    if (hit != null) return applyHit(p, hit, key)
+                    reason = if (r.hits.isEmpty()) {
+                        "立创检索「$key」没有结果"
                     } else {
-                        return applyHit(p, hit, key)
+                        "立创只有模糊结果（例如「${r.hits.first().mpn}」），可能是别的封装/型号，没有自动填。" +
+                            "把型号写具体些（如完整料号）再试"
                     }
                 }
             }
@@ -306,7 +313,10 @@ class VaultRepository(private val db: AppDb, private val appContext: Context) {
         val code = if (p.lcscCode.isBlank()) hit.lcscCode else p.lcscCode
         if (p.lcscCode.isBlank() && hit.lcscCode.isNotBlank()) changed += "立创号 ${hit.lcscCode}"
 
-        val productId = if (hit.productId > 0) hit.productId else p.lcscProductId
+        // 只有在「本来没号」或「号与命中一致」时才改商品 id，
+        // 否则会出现 C8734 配着另一个商品的 id，链接直接跳错页
+        val codeMatches = p.lcscCode.isBlank() || hit.lcscCode.equals(p.lcscCode, ignoreCase = true)
+        val productId = if (hit.productId > 0 && codeMatches) hit.productId else p.lcscProductId
 
         val pkg = if (p.packageName.isBlank()) hit.packageName else p.packageName
         if (pkg != p.packageName && pkg.isNotBlank()) changed += "封装 $pkg"
