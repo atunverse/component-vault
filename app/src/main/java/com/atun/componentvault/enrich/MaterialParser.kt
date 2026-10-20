@@ -198,7 +198,8 @@ object MaterialParser {
             else -> 1.75
         }
         val diameter = fmtQty(diameterMm)
-        val color = FilamentPresets.COLORS.firstOrNull { raw.contains(it.name) }?.name ?: "未标注"
+        // 走 guessColor（长名优先），否则「浅绿」「米白」会被认成「绿」「白」
+        val color = FilamentPresets.guessColor(raw)?.name ?: "未标注"
         val netWeight = Regex("(\\d+(?:\\.\\d+)?)\\s*(?:kg|KG|Kg)").find(raw)?.let {
             (it.groupValues[1].toDoubleOrNull() ?: 1.0) * 1000.0
         } ?: Regex("(\\d{3,4})\\s*(?:g|G|克)").find(raw)?.let {

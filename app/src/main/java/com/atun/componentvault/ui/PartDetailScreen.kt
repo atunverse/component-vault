@@ -42,6 +42,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -54,6 +55,7 @@ import com.atun.componentvault.Graph
 import com.atun.componentvault.data.Domains
 import com.atun.componentvault.data.Part
 import com.atun.componentvault.data.Txn
+import com.atun.componentvault.data.VaultRepository
 import com.atun.componentvault.data.fmtQty
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
@@ -84,10 +86,19 @@ fun PartDetailScreen(partId: Long, onBack: () -> Unit, onEdit: () -> Unit) {
     var lcscBusy by remember { mutableStateOf(false) }
     var lcscMsg by remember { mutableStateOf<String?>(null) }
     var lcscOk by remember { mutableStateOf(false) }
+    // 模糊命中时立创返回的疑似项：让用户点一个，不用自己再去立创网站翻
+    var lcscOptions by remember { mutableStateOf<List<VaultRepository.LcscOption>>(emptyList()) }
+    var pickingCode by remember { mutableStateOf("") }
 
     val p = part
     LaunchedEffect(partId, p?.qty, p?.updatedAt, refreshTick) {
         txns = Graph.repo.txnsOf(partId)
+    }
+    // 换器件时把上一件的检索反馈清掉，否则会让人以为新器件也查过了
+    LaunchedEffect(partId) {
+        lcscMsg = null
+        lcscOptions = emptyList()
+        lcscOk = false
     }
 
     if (p == null) {
@@ -290,10 +301,12 @@ fun PartDetailScreen(partId: Long, onBack: () -> Unit, onEdit: () -> Unit) {
                                 if (!lcscBusy) {
                                     lcscBusy = true
                                     lcscMsg = null
+                                    lcscOptions = emptyList()
                                     scope.launch {
                                         val r = Graph.repo.refreshLcsc(p.id)
                                         lcscOk = r.ok
                                         lcscMsg = r.message
+                                        lcscOptions = if (r.ok) emptyList() else r.options
                                         lcscBusy = false
                                         refreshTick++
                                     }
@@ -306,6 +319,28 @@ fun PartDetailScreen(partId: Long, onBack: () -> Unit, onEdit: () -> Unit) {
                                     color = if (lcscOk) Color(0xFF059669) else Color(0xFFD97706),
                                     modifier = Modifier.padding(start = 2.dp, bottom = 4.dp)
                                 )
+                            }
+                            if (lcscOptions.isNotEmpty()) {
+                                Spacer(Modifier.height(4.dp))
+                                lcscOptions.forEach { opt ->
+                                    LcscOptionRow(
+                                        opt = opt,
+                                        busy = pickingCode == opt.lcscCode
+                                    ) {
+                                        if (pickingCode.isBlank() && !lcscBusy) {
+                                            pickingCode = opt.lcscCode
+                                            scope.launch {
+                                                val r = Graph.repo.applyLcscOption(p.id, opt.lcscCode)
+                                                lcscOk = r.ok
+                                                lcscMsg = r.message
+                                                if (r.ok) lcscOptions = emptyList()
+                                                pickingCode = ""
+                                                refreshTick++
+                                            }
+                                        }
+                                    }
+                                    Spacer(Modifier.height(6.dp))
+                                }
                             }
                         }
                         // 五金件命中率不稳，给一个能自己去找的入口
@@ -515,6 +550,62 @@ private fun Pill(text: String, color: Color) {
             .padding(horizontal = 6.dp, vertical = 2.dp)
     ) {
         Text(text, fontSize = 9.5.sp, color = color)
+    }
+}
+
+/**
+ * 一条立创疑似项。整行可点 —— 手机上点小字不算手感，整行热区才够。
+ * 副标题按「封装 · 品牌 · 立创号 · 单价」拼，用户判断依据主要看封装对不对。
+ */
+@Composable
+private fun LcscOptionRow(
+    opt: VaultRepository.LcscOption,
+    busy: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable { onClick() }
+    ) {
+        Row(
+            Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    opt.mpn.ifBlank { opt.lcscCode },
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                val sub = listOfNotNull(
+                    opt.packageName.takeIf { it.isNotBlank() },
+                    opt.brand.takeIf { it.isNotBlank() },
+                    opt.lcscCode.takeIf { it.isNotBlank() },
+                    if (opt.price > 0.0) "¥${fmtQty(opt.price)}" else null
+                ).joinToString(" · ")
+                if (sub.isNotBlank()) {
+                    Text(
+                        sub,
+                        fontSize = 9.5.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                if (busy) "应用…" else "选它",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
     }
 }
 

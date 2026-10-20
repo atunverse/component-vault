@@ -30,6 +30,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,6 +49,7 @@ import com.atun.componentvault.data.Domains
 import com.atun.componentvault.data.FilamentInfo
 import com.atun.componentvault.data.Part
 import com.atun.componentvault.data.fmtQty
+import com.atun.componentvault.enrich.SearchTerms
 
 /** 库存 Tab 内的三级页面栈。只有一个 Long 参数，不需要引 navigation-compose */
 private sealed interface Route {
@@ -67,10 +69,17 @@ private sealed interface Route {
 fun StockScreen(
     domain: String,
     query: String,
-    onQuery: (String) -> Unit
+    onQuery: (String) -> Unit,
+    /**
+     * 当前是否停在列表页。根节点用它在列表页显示右下角加号、进详情页时收起 ——
+     * 详情页右下角浮一个「录入」按钮只会挡住流水与删除按钮。
+     */
+    onListVisible: (Boolean) -> Unit = {}
 ) {
     var route by remember { mutableStateOf<Route>(Route.List) }
     var adjusting by remember { mutableStateOf<Part?>(null) }
+
+    LaunchedEffect(route) { onListVisible(route == Route.List) }
 
     BackHandler(enabled = route != Route.List) {
         route = when (val r = route) {
@@ -132,20 +141,26 @@ private fun StockList(
     }
 
     val filtered = remember(scoped, query, category, onlyLow, searching) {
-        val q = query.trim().lowercase()
+        // 空格分开的多个词按 AND 处理：`PLA 黑` 能同时命中「PLA 线材」的名称与「黑色」的规格。
+        // 之前是整串 contains，带空格就永远搜不到，等于把搜索框变成了「只认连续子串」。
+        val terms = SearchTerms.split(query)
         scoped.filter { p ->
             (searching || category == "全部" || p.category == category) &&
                 (!onlyLow || p.isLow || p.isOut) &&
-                (q.isEmpty() || listOf(
-                    p.mpn, p.name, p.category, p.packageName, p.tags,
-                    p.internalCode, p.lcscCode, p.location, p.spec, p.brand, p.note
-                ).any { it.lowercase().contains(q) })
+                SearchTerms.matchesAny(
+                    listOf(
+                        p.mpn, p.name, p.category, p.packageName, p.tags,
+                        p.internalCode, p.lcscCode, p.location, p.spec, p.brand, p.note
+                    ),
+                    terms
+                )
         }
     }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 20.dp),
+        // 底部留出 96dp：右下角悬浮着录入按钮，最后一条不能被它压住
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item {

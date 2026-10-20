@@ -143,9 +143,12 @@ object FilamentPresets {
             .firstOrNull { t.contains(it.name.uppercase()) }
     }
 
-    /** 从自由文本里猜颜色名 */
+    /**
+     * 从自由文本里猜颜色名。**先长后短**：否则「浅绿」会先命中「绿」，
+     * 「米白」会先命中「白」，存进库里的颜色就错了。
+     */
     fun guessColor(text: String): Color? =
-        COLORS.firstOrNull { text.contains(it.name) }
+        COLORS.sortedByDescending { it.name.length }.firstOrNull { text.contains(it.name) }
 
     /** 剩余长度估算：质量(g) → 长度(m)。体积=质量/密度，长度=体积/截面积 */
     fun lengthMeters(massG: Double, density: Double, diameterMm: Double): Double? {

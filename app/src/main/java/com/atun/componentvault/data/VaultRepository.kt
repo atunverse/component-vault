@@ -5,12 +5,13 @@ import com.atun.componentvault.enrich.LcscHit
 import com.atun.componentvault.enrich.LcscLink
 import com.atun.componentvault.enrich.LcscMatcher
 import com.atun.componentvault.enrich.LcscResolver
+import com.atun.componentvault.enrich.SearchTerms
+import kotlin.math.roundToLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
-import kotlin.math.roundToLong
 
 /**
  * 库存业务仓库。所有改数量的动作都必须走 [moveStock]，
@@ -227,14 +228,33 @@ class VaultRepository(private val db: AppDb, private val appContext: Context) {
     }
 
     /**
+     * 一个「让用户自己挑」的立创候选。
+     *
+     * 只带界面需要展示的字段：型号、封装、品牌、单价、现货、匹配强度。
+     * 不放 LcscHit 全量对象 —— 界面不该依赖检索层的模型，将来换数据源不用改 UI。
+     */
+    data class LcscOption(
+        val lcscCode: String,
+        val mpn: String,
+        val packageName: String = "",
+        val brand: String = "",
+        val price: Double = 0.0,
+        val stock: Int = 0,
+        val matchKind: String = ""
+    )
+
+    /**
      * 刷新结果。界面直接展示，不用自己拼字符串。
      * @param message 给用户看的一句话，成功失败都有人话解释
+     * @param options 只有模糊命中时才有值：让用户点一个直接用，不用自己再敲一遍
      */
     data class RefreshReport(
         val ok: Boolean,
         val message: String,
         val changed: List<String> = emptyList(),
-        val code: String = ""
+        val code: String = "",
+        val options: List<LcscOption> = emptyList(),
+        val keyword: String = ""
     )
 
     /**
@@ -252,23 +272,87 @@ class VaultRepository(private val db: AppDb, private val appContext: Context) {
         if (keys.isEmpty()) return RefreshReport(false, "型号和名称都是空的，没有可检索的内容")
 
         var reason = "立创未收录该型号"
-        for (key in keys) {
+        var fallback: RefreshReport? = null
+        for (raw in keys) {
+            // 型号里带空格（`AMS1117 3.3`）时，只拿最像型号的那个词去查
+            val key = SearchTerms.primary(SearchTerms.split(raw)).ifBlank { raw }
             when (val r = LcscResolver.resolve(key, forceRefresh = true)) {
                 is LcscResolver.Result.Failed -> reason = "网络不可用：${r.reason}"
                 is LcscResolver.Result.Empty -> reason = "立创检索「$key」没有结果"
                 is LcscResolver.Result.Hits -> {
                     val hit = pickHit(p, r.hits)
                     if (hit != null) return applyHit(p, hit, key)
-                    reason = if (r.hits.isEmpty()) {
-                        "立创检索「$key」没有结果"
-                    } else {
-                        "立创只有模糊结果（例如「${r.hits.first().mpn}」），可能是别的封装/型号，没有自动填。" +
-                            "把型号写具体些（如完整料号）再试"
+                    // 自动挑不准，但结果并非无意义：把它们变成可点选的候选，交给用户判断。
+                    // 之前这里是死路一条（只回一句「只有模糊结果」），用户拿着一条具体型号
+                    // 却只能自己去立创网站再搜一遍 —— 明明候选就在手上。
+                    val opts = r.hits.take(MAX_OPTIONS).map {
+                        LcscOption(
+                            lcscCode = it.lcscCode,
+                            mpn = it.mpn,
+                            packageName = it.packageName,
+                            brand = it.brand,
+                            price = it.unitPrice,
+                            stock = it.stock,
+                            matchKind = when (it.matchKind) {
+                                LcscHit.MatchKind.CODE -> "立创号精确"
+                                LcscHit.MatchKind.EXACT -> "型号精确"
+                                LcscHit.MatchKind.PREFIX -> "型号前缀"
+                                LcscHit.MatchKind.FUZZY -> "疑似"
+                            }
+                        )
                     }
+                    if (opts.isNotEmpty() && fallback == null) {
+                        fallback = RefreshReport(
+                            ok = false,
+                            message = "没有完全匹配的型号，下面 ${opts.size} 个是立创的疑似项，" +
+                                "点一个就按它填（或者把型号写具体些再刷新）",
+                            options = opts,
+                            keyword = key
+                        )
+                    }
+                    reason = "立创只有模糊结果，没有自动填"
                 }
             }
         }
-        return RefreshReport(false, reason)
+        return fallback ?: RefreshReport(false, reason)
+    }
+
+    /** 候选最多给几条：再多用户也懒得看，反而把详情页撑得很长 */
+    private companion object {
+        const val MAX_OPTIONS = 6
+    }
+
+    /**
+     * 用户从候选里手动挑了一条。
+     *
+     * 和自动匹配不同：**这是明确的意图**，所以允许覆盖已有的立创号、封装、品牌、单价与图标
+     * （自动匹配只填空位，见 [applyHit] 的 override 参数）。
+     * 但**不动用户的型号与名称** —— 库存里叫「10kΩ」是他自己的叫法，
+     * 选个料号不代表要把它改名成 RC0603FR-0710KL。
+     */
+    suspend fun applyLcscOption(partId: Long, lcscCode: String): RefreshReport {
+        val p = partDao.byId(partId) ?: return RefreshReport(false, "器件不存在")
+        val code = lcscCode.trim()
+        if (code.isBlank()) return RefreshReport(false, "立创号为空")
+
+        // 先按 C 编号精确查一次：立创对 C 编号支持最好，一条就能定位
+        val direct = (LcscResolver.resolve(code, forceRefresh = true) as? LcscResolver.Result.Hits)
+            ?.hits.orEmpty()
+        direct.firstOrNull { it.lcscCode.equals(code, ignoreCase = true) }?.let {
+            return applyHit(p, it, "手动选择 $code", override = true)
+        }
+
+        // 有些件按 C 编号反查拿不到（立创偶尔只给商品页不给检索记录），
+        // 退回原始检索词再查一遍，在这次的结果里按 code 找
+        for (raw in searchKeys(p, "")) {
+            val key = SearchTerms.primary(SearchTerms.split(raw)).ifBlank { raw }
+            val rr = LcscResolver.resolve(key, forceRefresh = true)
+            val hits = (rr as? LcscResolver.Result.Hits)?.hits.orEmpty()
+            hits.firstOrNull { it.lcscCode.equals(code, ignoreCase = true) }?.let {
+                return applyHit(p, it, "手动选择 $code", override = true)
+            }
+        }
+        return RefreshReport(false, "没取到 $code 的详情，可能网络不通，稍后再试一次")
     }
 
     /** 批量刷新的进度快照 */
@@ -307,27 +391,57 @@ class VaultRepository(private val db: AppDb, private val appContext: Context) {
         return final
     }
 
-    private suspend fun applyHit(p: Part, hit: LcscHit, key: String): RefreshReport {
+    /**
+     * 把一条立创记录写回库存。
+     *
+     * @param force false = 自动匹配，**只填空位**，用户手改过的一律不动；
+     *              true = 用户从候选里手动点的，明确要换成这条，允许覆盖。
+     */
+    private suspend fun applyHit(
+        p: Part,
+        hit: LcscHit,
+        key: String,
+        force: Boolean = false
+    ): RefreshReport {
         val changed = mutableListOf<String>()
 
-        val code = if (p.lcscCode.isBlank()) hit.lcscCode else p.lcscCode
-        if (p.lcscCode.isBlank() && hit.lcscCode.isNotBlank()) changed += "立创号 ${hit.lcscCode}"
+        val code = if (force || p.lcscCode.isBlank()) {
+            hit.lcscCode.ifBlank { p.lcscCode }
+        } else p.lcscCode
+        if (code != p.lcscCode && code.isNotBlank()) changed += "立创号 $code"
 
-        // 只有在「本来没号」或「号与命中一致」时才改商品 id，
+        // 只有在「本来没号」「号与命中一致」或「用户手动指定」时才改商品 id，
         // 否则会出现 C8734 配着另一个商品的 id，链接直接跳错页
-        val codeMatches = p.lcscCode.isBlank() || hit.lcscCode.equals(p.lcscCode, ignoreCase = true)
+        val codeMatches = force || p.lcscCode.isBlank() ||
+            hit.lcscCode.equals(p.lcscCode, ignoreCase = true)
         val productId = if (hit.productId > 0 && codeMatches) hit.productId else p.lcscProductId
 
-        val pkg = if (p.packageName.isBlank()) hit.packageName else p.packageName
+        val pkg = when {
+            force && hit.packageName.isNotBlank() -> hit.packageName
+            p.packageName.isBlank() -> hit.packageName
+            else -> p.packageName
+        }
         if (pkg != p.packageName && pkg.isNotBlank()) changed += "封装 $pkg"
 
-        val brand = if (p.brand.isBlank()) hit.brand else p.brand
+        val brand = when {
+            force && hit.brand.isNotBlank() -> hit.brand
+            p.brand.isBlank() -> hit.brand
+            else -> p.brand
+        }
         if (brand != p.brand && brand.isNotBlank()) changed += "品牌 $brand"
 
-        val datasheet = if (p.datasheetUrl.isBlank()) hit.datasheetUrl.orEmpty() else p.datasheetUrl
+        val datasheet = when {
+            force && !hit.datasheetUrl.isNullOrBlank() -> hit.datasheetUrl.orEmpty()
+            p.datasheetUrl.isBlank() -> hit.datasheetUrl.orEmpty()
+            else -> p.datasheetUrl
+        }
         if (datasheet != p.datasheetUrl && datasheet.isNotBlank()) changed += "数据手册"
 
-        val price = if (p.price <= 0.0 && hit.unitPrice > 0.0) hit.unitPrice else p.price
+        val price = when {
+            force && hit.unitPrice > 0.0 -> hit.unitPrice
+            p.price <= 0.0 && hit.unitPrice > 0.0 -> hit.unitPrice
+            else -> p.price
+        }
         if (price != p.price) changed += "单价 ¥${fmtQty(price)}"
 
         val imageUrl = hit.imageUrl.ifBlank { p.iconUrl }
@@ -336,7 +450,8 @@ class VaultRepository(private val db: AppDb, private val appContext: Context) {
         var iconPath = p.iconPath
         var iconSource = p.iconSource
         var iconOk = false
-        val mayReplace = p.iconPath.isBlank() || p.iconSource == "lcsc"
+        // 用户手动选了这一条，图也跟着换（他明确表达要这个商品）
+        val mayReplace = force || p.iconPath.isBlank() || p.iconSource == "lcsc"
         if (mayReplace && imageUrl.isNotBlank() && IconStore.fromUrl(appContext, p.id, imageUrl)) {
             iconPath = IconStore.nameFor(p.id)
             iconSource = "lcsc"

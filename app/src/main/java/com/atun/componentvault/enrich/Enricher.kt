@@ -64,19 +64,33 @@ object Enricher {
     }
 
     /**
-     * 查立创元件库。输入型号 / 关键词 / C 编号都可以。
+     * 查立创元件库。输入型号 / 关键词 / C 编号都可以，**中间带空格也可以**。
+     *
+     * 多词处理：立创的检索接口对单个型号极准、对多词时好时坏，所以拿「最像型号的那个词」
+     * 去查（见 [SearchTerms.primary]），剩下的词在结果里做 AND 过滤。
+     * 过滤后为空就不过滤 —— 商品标题常常只写半个型号，宁可多给几条让人自己看，
+     * 也好过因为多打一个词就得到「未收录」。
+     *
      * 返回的每条 Candidate 都带 productUrl，点一下就能打开商品页。
      */
-    suspend fun lcscSuggest(input: String, forceRefresh: Boolean = false): Remote =
-        when (val r = LcscResolver.resolve(input, forceRefresh)) {
-            is LcscResolver.Result.Hits -> Remote.Hits(
-                query = r.query,
-                items = r.hits.map { it.toCandidate() },
-                fromCache = r.fromCache
-            )
+    suspend fun lcscSuggest(input: String, forceRefresh: Boolean = false): Remote {
+        val terms = SearchTerms.split(input)
+        val keyword = SearchTerms.primary(terms).ifBlank { input.trim() }
+        return when (val r = LcscResolver.resolve(keyword, forceRefresh)) {
+            is LcscResolver.Result.Hits -> {
+                val hits = SearchTerms.filterOrKeep(r.hits, terms) { hit ->
+                    "${hit.mpn} ${hit.title} ${hit.brand} ${hit.packageName} ${hit.category}"
+                }
+                Remote.Hits(
+                    query = r.query,
+                    items = hits.map { it.toCandidate() },
+                    fromCache = r.fromCache
+                )
+            }
             is LcscResolver.Result.Empty -> Remote.Empty
             is LcscResolver.Result.Failed -> Remote.Failed(r.reason)
         }
+    }
 
     /** 立创结果 → 候选卡片。数据来自官方，故 guessed=false */
     private fun LcscHit.toCandidate(): Candidate {

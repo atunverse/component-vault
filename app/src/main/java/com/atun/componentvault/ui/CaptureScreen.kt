@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,6 +16,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -23,6 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -34,8 +38,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -44,6 +51,7 @@ import com.atun.componentvault.data.Domains
 import com.atun.componentvault.data.Part
 import com.atun.componentvault.enrich.Enricher
 import com.atun.componentvault.enrich.MaterialParser
+import com.atun.componentvault.enrich.SearchTerms
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
@@ -75,7 +83,11 @@ private data class CreateSeed(
 )
 
 @Composable
-fun CaptureScreen(initialDomain: String = Domains.ELECTRONICS) {
+fun CaptureScreen(
+    initialDomain: String = Domains.ELECTRONICS,
+    /** 从右下角加号进来时传，页内给一个返回；作为独立 Tab 使用时传 null 即可 */
+    onBack: (() -> Unit)? = null
+) {
     var domain by remember { mutableStateOf(initialDomain) }
     var input by remember { mutableStateOf("") }
     var seed by remember { mutableStateOf<CreateSeed?>(null) }
@@ -83,6 +95,10 @@ fun CaptureScreen(initialDomain: String = Domains.ELECTRONICS) {
     var remote by remember { mutableStateOf<Enricher.Remote?>(null) }
     var loading by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val focus = LocalFocusManager.current
+
+    // 空格分隔的多个关键词：`STM32 F103C8T6`、`PLA 1.75 黑` 都能正常用
+    val terms = remember(input) { SearchTerms.split(input) }
 
     // 五金/耗材：本地规则毫秒级出结果，不依赖网络
     val draft = remember(input, domain) {
@@ -141,8 +157,13 @@ fun CaptureScreen(initialDomain: String = Domains.ELECTRONICS) {
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(14.dp)
+            .padding(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 24.dp)
     ) {
+        if (onBack != null) {
+            TextButton(onClick = onBack, contentPadding = PaddingValues(horizontal = 0.dp)) {
+                Text("← 返回", fontSize = 12.sp)
+            }
+        }
         Text("快速录入", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(4.dp))
         Text(
@@ -166,8 +187,15 @@ fun CaptureScreen(initialDomain: String = Domains.ELECTRONICS) {
 
         OutlinedTextField(
             value = input,
+            // 原样写回，不做 trim / 不做单词切分：空格是合法的关键词分隔符，
+            // 边打边删都不该被输入框自己改写
             onValueChange = { input = it },
             modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Text,
+                imeAction = ImeAction.Search
+            ),
+            keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() }),
             label = {
                 Text(
                     when (domain) {
@@ -193,6 +221,14 @@ fun CaptureScreen(initialDomain: String = Domains.ELECTRONICS) {
         )
 
         Spacer(Modifier.height(8.dp))
+        if (terms.size > 1) {
+            Text(
+                "按 ${terms.size} 个关键词检索：" + terms.joinToString("　/　"),
+                fontSize = 10.5.sp,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(Modifier.height(3.dp))
+        }
         Text(
             when (domain) {
                 Domains.ELECTRONICS -> "联网查立创元件库，返回规格参数、封装、立创号与商品页链接　·　断网时退回本地规则"
