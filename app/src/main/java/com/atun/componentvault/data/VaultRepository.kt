@@ -83,7 +83,9 @@ class VaultRepository(private val db: AppDb, private val appContext: Context) {
             )
         }
         // 图标是增强项：后台异步抓，失败不影响入库，也不给用户转圈
-        if (part.iconPath.isBlank() && (part.iconUrl.isNotBlank() || part.lcscProductId > 0)) {
+        if (part.iconPath.isBlank() &&
+            (part.iconUrl.isNotBlank() || part.lcscProductId > 0 || part.lcscCode.isNotBlank())
+        ) {
             scope.launch { fetchIcon(id) }
         }
         return id
@@ -284,6 +286,7 @@ class VaultRepository(private val db: AppDb, private val appContext: Context) {
                 internalCode = "", mpn = "STM32F103C8T6", name = "ARM Cortex-M3 微控制器", category = "微控制器",
                 packageName = "LQFP-48", brand = "ST",
                 paramsJson = """{"内核":"Cortex-M3","主频":"72MHz","Flash":"64KB","RAM":"20KB"}""",
+                lcscCode = "C8734", lcscProductId = 9243,
                 tags = "MCU,最小系统,通用控制", summary = "Cortex-M3 72MHz 64KB Flash，LQFP-48，通用控制主力型号",
                 qty = 12.0, lowThreshold = 5.0, location = "B-02-2", price = 8.60
             ),
@@ -300,6 +303,7 @@ class VaultRepository(private val db: AppDb, private val appContext: Context) {
                 domain = Domains.HARDWARE, packageName = "M3×8", spec = "螺纹 M3 · 长 8mm · 内六角圆柱头 · 304 不锈钢",
                 brand = "AOFENG(奥峰)",
                 paramsJson = """{"螺纹":"M3","长度":"8mm","头型":"内六角圆柱头","标准":"DIN912","材质":"304 不锈钢"}""",
+                lcscCode = "C5138485",
                 tags = "打印机,VORON,结构件", summary = "DIN912 M3×8 内六角圆柱头螺钉，304 不锈钢",
                 qty = 180.0, unit = "个", lowThreshold = 40.0, location = "五金柜 A-1", price = 0.06
             ),
