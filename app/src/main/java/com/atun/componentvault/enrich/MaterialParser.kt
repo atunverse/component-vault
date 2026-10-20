@@ -1,6 +1,8 @@
 package com.atun.componentvault.enrich
 
 import com.atun.componentvault.data.Domains
+import com.atun.componentvault.data.FilamentKeys
+import com.atun.componentvault.data.fmtQty
 
 /**
  * 非电子物料的解析器：五金标准件 + 3D 打印耗材。
@@ -182,52 +184,55 @@ object MaterialParser {
 
     // ---------------------------------------------------------------- 3D 耗材
 
-    private val FILAMENT_MATERIALS = listOf("PLA+", "PLA", "PETG", "ABS", "ASA", "TPU", "PA", "PC", "PVA", "HIPS")
-    private val FILAMENT_COLORS = listOf(
-        "黑", "白", "灰", "红", "蓝", "绿", "黄", "橙", "紫", "粉", "棕", "金", "银", "透明", "本色", "夜光"
-    )
-
+    // 材料表与颜色表统一由 FilamentPresets 提供：预设里加一种材料，录入解析自动跟上，
+    // 不会出现「预设里有 PETG-CF，解析器却只认到 PETG」这种两套名单不一致的问题。
     private fun filament(raw: String): Draft? {
         val upper = raw.uppercase()
-        val material = FILAMENT_MATERIALS.firstOrNull { upper.contains(it) } ?: return null
-        // 只写了 PLA 也要能识别，但要避免「PLA191」这类型号误判
-        if (material == "PLA" && Regex("""PLA\d""").containsMatchIn(upper)) return null
+        val material = FilamentPresets.guessMaterial(raw) ?: return null
+        // 只写 PLA 也要能识别，但要避免「PLA191」这类型号误判
+        if (material.name == "PLA" && Regex("PLA\\d").containsMatchIn(upper)) return null
 
-        val diameter = when {
-            raw.contains("2.85") -> "2.85mm"
-            raw.contains("3.0") -> "3.00mm"
-            else -> "1.75mm"
+        val diameterMm = when {
+            raw.contains("2.85") -> 2.85
+            raw.contains("3.0") -> 3.0
+            else -> 1.75
         }
-        val color = FILAMENT_COLORS.firstOrNull { raw.contains(it) } ?: "未标注"
-        val netWeight = Regex("""(\d+(?:\.\d+)?)\s*(?:kg|KG|Kg)""").find(raw)?.let {
+        val diameter = fmtQty(diameterMm)
+        val color = FilamentPresets.COLORS.firstOrNull { raw.contains(it.name) }?.name ?: "未标注"
+        val netWeight = Regex("(\\d+(?:\\.\\d+)?)\\s*(?:kg|KG|Kg)").find(raw)?.let {
             (it.groupValues[1].toDoubleOrNull() ?: 1.0) * 1000.0
-        } ?: Regex("""(\d{3,4})\s*(?:g|G|克)""").find(raw)?.let {
+        } ?: Regex("(\\d{3,4})\\s*(?:g|G|克)").find(raw)?.let {
             it.groupValues[1].toDoubleOrNull()
         } ?: 1000.0
 
-        val mpn = "$material $diameter $color"
+        val mpn = "${material.name} $diameter $color"
+        // 预设的密度与温度直接带进参数：录完就能算剩余米数，不用再手填
         val params = linkedMapOf(
-            "材质" to material,
-            "直径" to diameter,
-            "颜色" to color,
-            "净重" to "${netWeight.toInt()}g"
+            FilamentKeys.MATERIAL to material.name,
+            FilamentKeys.DIAMETER to diameter,
+            FilamentKeys.COLOR to color,
+            FilamentKeys.NET_WEIGHT to netWeight.toInt().toString(),
+            FilamentKeys.DENSITY to material.density.toString(),
+            FilamentKeys.NOZZLE to material.nozzle,
+            FilamentKeys.BED to material.bed
         )
+        FilamentPresets.color(color)?.let { params[FilamentKeys.COLOR_HEX] = it.hex }
 
         return Draft(
             domain = Domains.FILAMENT,
             mpn = mpn,
-            name = "$material 线材",
-            category = material,
-            packageName = diameter,
-            spec = "直径 $diameter · 净重 ${(netWeight / 1000.0).let { if (it == 1.0) "1kg" else "${it}kg" }} · ${color}色",
+            name = "${material.name} 线材",
+            category = material.name,
+            packageName = "${diameter}mm",
+            spec = "直径 $diameter mm · 净重 ${(netWeight / 1000.0).let { if (it == 1.0) "1kg" else "${it}kg" }} · $color",
             brand = "",
             params = params,
-            tags = listOfNotNull("3D打印", material, if (color != "未标注") "$color 色" else null),
-            summary = "$material 线材 $diameter ${color}色，净重 ${netWeight.toInt()}g",
+            tags = listOfNotNull("3D打印", material.name, if (color != "未标注") "$color 色" else null),
+            summary = "${material.name} 线材 $diameter mm $color，净重 ${netWeight.toInt()}g",
             unit = "g",
             // 实测：立创 EDA 库不收录耗材，检索「PLA 1.75mm」返回固态继电器，纯属噪声
             searchKeyword = "",
-            basis = "按 3D 耗材规则解析：$material / $diameter / $color → 按克管理"
+            basis = "按 3D 耗材规则解析：${material.name} / $diameter / $color → 按克管理"
         )
     }
 }

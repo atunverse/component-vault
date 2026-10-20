@@ -109,8 +109,8 @@ data class FilamentDraft(
                 diameter = FilamentInfo.diameterMm(p)?.let { fmtQty(it) } ?: "1.75",
                 colorName = FilamentInfo.colorName(p),
                 colorHex = FilamentInfo.colorHex(p),
-                netWeight = FilamentInfo.get(p, FilamentKeys.NET_WEIGHT)
-                    .ifBlank { FilamentInfo.netWeight(p)?.let { fmtQty(it) } ?: "" },
+                // 历史数据里净重可能写成「1000g」，这里统一成纯数字，好让 Chip 选中
+                netWeight = FilamentInfo.netWeight(p)?.let { fmtQty(it) } ?: "",
                 spoolWeight = FilamentInfo.get(p, FilamentKeys.SPOOL_WEIGHT),
                 density = FilamentInfo.get(p, FilamentKeys.DENSITY),
                 nozzle = FilamentInfo.get(p, FilamentKeys.NOZZLE),

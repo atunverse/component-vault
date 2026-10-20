@@ -89,9 +89,13 @@ class MaterialParserTest {
         assertEquals(Domains.FILAMENT, d.domain)
         assertEquals("g", d.unit)
         assertEquals("PLA", d.params["材质"])
-        assertEquals("1.75mm", d.params["直径"])
+        // 数值不带单位：单位由 ParamDef 声明（mm / g），否则 Chip 选不中、聚合也麻烦
+        assertEquals("1.75", d.params["直径"])
         assertEquals("黑", d.params["颜色"])
-        assertEquals("1000g", d.params["净重"])
+        assertEquals("1000", d.params["净重"])
+        // 预设的密度与温度要一起带进来，否则新录的盘算不出剩余米数
+        assertEquals("1.24", d.params["密度"])
+        assertEquals("195-215", d.params["喷嘴温度"])
         // 实测立创 EDA 库不收录耗材，检索只会返回固态继电器，所以必须留空
         assertEquals("", d.searchKeyword)
     }
@@ -99,8 +103,9 @@ class MaterialParserTest {
     @Test
     fun `耗材可识别 2_85 与带 kg 的净重`() {
         val d = MaterialParser.parse("PETG 2.85 透明 2kg")!!
-        assertEquals("2.85mm", d.params["直径"])
-        assertEquals("2000g", d.params["净重"])
+        assertEquals("2.85", d.params["直径"])
+        assertEquals("2000", d.params["净重"])
+        assertEquals("1.27", d.params["密度"])
     }
 
     @Test
